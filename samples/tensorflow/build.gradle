@@ -1,0 +1,34 @@
+apply plugin: 'konan'
+
+def tensorflowHome = "${System.getProperty("user.home")}/.konan/third-party/tensorflow"
+
+konanInterop {
+    tensorflow {
+        includeDirs "${tensorflowHome}/include"
+    }
+}
+
+konanArtifacts {
+    Tensorflow {
+        useInterop "tensorflow"
+        linkerOpts "-L${tensorflowHome}/lib -ltensorflow"
+    }
+}
+
+run.dependsOn 'warning'
+
+task warning {
+    doLast {
+        println "Note: You may need to specify LD_LIBRARY_PATH or DYLD_LIBRARY_PATH env variables to $tensorflowHome/lib if the TensorFlow dynamic library cannot be found."
+
+    }
+}
+
+task downloadTensorflow(type: Exec) {
+    workingDir getProjectDir()
+    commandLine './downloadTensorflow.sh'
+}
+
+processTensorflowInterop {
+    dependsOn 'downloadTensorflow'
+}

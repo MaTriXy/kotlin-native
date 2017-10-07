@@ -16,12 +16,16 @@
 
 package org.jetbrains.kotlin.backend.konan
 
-import llvm.*
+import llvm.LLVMDumpModule
+import llvm.LLVMModuleRef
+import org.jetbrains.kotlin.backend.common.ReflectionTypes
 import org.jetbrains.kotlin.backend.common.validateIrModule
 import org.jetbrains.kotlin.backend.jvm.descriptors.initialize
 import org.jetbrains.kotlin.backend.konan.descriptors.*
-import org.jetbrains.kotlin.backend.konan.ir.DumpIrTreeWithDescriptorsVisitor
-import org.jetbrains.kotlin.backend.konan.ir.Ir
+import org.jetbrains.kotlin.backend.common.DumpIrTreeWithDescriptorsVisitor
+import org.jetbrains.kotlin.backend.konan.ir.KonanIr
+import org.jetbrains.kotlin.backend.konan.library.KonanLibraryWriter
+import org.jetbrains.kotlin.backend.konan.library.LinkData
 import org.jetbrains.kotlin.backend.konan.llvm.*
 import org.jetbrains.kotlin.descriptors.*
 import org.jetbrains.kotlin.descriptors.annotations.Annotations
@@ -29,31 +33,24 @@ import org.jetbrains.kotlin.descriptors.impl.PropertyDescriptorImpl
 import org.jetbrains.kotlin.descriptors.impl.ReceiverParameterDescriptorImpl
 import org.jetbrains.kotlin.descriptors.impl.SimpleFunctionDescriptorImpl
 import org.jetbrains.kotlin.descriptors.impl.ValueParameterDescriptorImpl
-import org.jetbrains.kotlin.incremental.components.NoLookupLocation
 import org.jetbrains.kotlin.ir.IrElement
 import org.jetbrains.kotlin.ir.SourceManager
 import org.jetbrains.kotlin.ir.declarations.*
 import org.jetbrains.kotlin.ir.declarations.impl.IrFieldImpl
-import org.jetbrains.kotlin.ir.util.*
+import org.jetbrains.kotlin.ir.util.DumpIrTreeVisitor
+import org.jetbrains.kotlin.ir.util.endOffsetOrUndefined
+import org.jetbrains.kotlin.ir.util.startOffsetOrUndefined
+import org.jetbrains.kotlin.ir.visitors.IrElementVisitor
 import org.jetbrains.kotlin.ir.visitors.IrElementVisitorVoid
 import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.ir.visitors.acceptVoid
 import org.jetbrains.kotlin.name.FqName
-import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.psi2ir.generators.GeneratorContext
 import org.jetbrains.kotlin.resolve.DescriptorUtils
 import org.jetbrains.kotlin.resolve.descriptorUtil.fqNameOrNull
-import org.jetbrains.kotlin.resolve.scopes.MemberScope
 import org.jetbrains.kotlin.resolve.scopes.receivers.ImplicitClassReceiver
-import org.jetbrains.kotlin.types.KotlinType
-import org.jetbrains.kotlin.types.KotlinTypeFactory
-import org.jetbrains.kotlin.types.TypeProjection
-import org.jetbrains.kotlin.types.typeUtil.asTypeProjection
-import org.jetbrains.kotlin.utils.addIfNotNull
 import java.lang.System.out
-import java.util.*
 import kotlin.LazyThreadSafetyMode.PUBLICATION
-import kotlin.reflect.KProperty
 
 internal class SpecialDeclarationsFactory(val context: Context) {
     private val enumSpecialDeclarationsFactory by lazy { EnumSpecialDeclarationsFactory(context) }
@@ -115,20 +112,20 @@ internal class SpecialDeclarationsFactory(val context: Context) {
         val returnType = when (bridgeDirections[0]) {
             BridgeDirection.TO_VALUE_TYPE   -> descriptor.returnType!!
             BridgeDirection.NOT_NEEDED      -> descriptor.returnType
-            BridgeDirection.FROM_VALUE_TYPE -> context.builtIns.anyType
+            BridgeDirection.FROM_VALUE_TYPE -> context.builtIns.nullableAnyType
         }
 
         val extensionReceiverType = when (bridgeDirections[1]) {
             BridgeDirection.TO_VALUE_TYPE   -> descriptor.extensionReceiverParameter!!.type
             BridgeDirection.NOT_NEEDED      -> descriptor.extensionReceiverParameter?.type
-            BridgeDirection.FROM_VALUE_TYPE -> context.builtIns.anyType
+            BridgeDirection.FROM_VALUE_TYPE -> context.builtIns.nullableAnyType
         }
 
         val valueParameters = descriptor.valueParameters.mapIndexed { index, valueParameterDescriptor ->
                 val outType = when (bridgeDirections[index + 2]) {
                     BridgeDirection.TO_VALUE_TYPE   -> valueParameterDescriptor.type
                     BridgeDirection.NOT_NEEDED      -> valueParameterDescriptor.type
-                    BridgeDirection.FROM_VALUE_TYPE -> context.builtIns.anyType
+                    BridgeDirection.FROM_VALUE_TYPE -> context.builtIns.nullableAnyType
                 }
                 ValueParameterDescriptorImpl(
                     containingDeclaration = valueParameterDescriptor.containingDeclaration,
@@ -156,83 +153,13 @@ internal class SpecialDeclarationsFactory(val context: Context) {
     }
 }
 
-
-class ReflectionTypes(module: ModuleDescriptor) {
-    val KOTLIN_REFLECT_FQ_NAME = FqName("kotlin.reflect")
-    val KONAN_INTERNAL_FQ_NAME = FqName("konan.internal")
-
-    private val kotlinReflectScope: MemberScope by lazy(LazyThreadSafetyMode.PUBLICATION) {
-        module.getPackage(KOTLIN_REFLECT_FQ_NAME).memberScope
-    }
-
-    private val konanInternalScope: MemberScope by lazy(LazyThreadSafetyMode.PUBLICATION) {
-        module.getPackage(KONAN_INTERNAL_FQ_NAME).memberScope
-    }
-
-    private fun find(memberScope: MemberScope, className: String): ClassDescriptor {
-        val name = Name.identifier(className)
-        return memberScope.getContributedClassifier(name, NoLookupLocation.FROM_REFLECTION) as ClassDescriptor
-    }
-
-    private class ClassLookup(val memberScope: MemberScope) {
-        operator fun getValue(types: ReflectionTypes, property: KProperty<*>): ClassDescriptor {
-            return types.find(memberScope, property.name.capitalize())
-        }
-    }
-
-    private fun getFunctionTypeArgumentProjections(
-            receiverType: KotlinType?,
-            parameterTypes: List<KotlinType>,
-            returnType: KotlinType
-    ): List<TypeProjection> {
-        val arguments = ArrayList<TypeProjection>(parameterTypes.size + (if (receiverType != null) 1 else 0) + 1)
-
-        arguments.addIfNotNull(receiverType?.asTypeProjection())
-
-        parameterTypes.mapTo(arguments, KotlinType::asTypeProjection)
-
-        arguments.add(returnType.asTypeProjection())
-
-        return arguments
-    }
-
-    fun getKFunction(n: Int): ClassDescriptor = find(kotlinReflectScope, "KFunction$n")
-
-    val kClass: ClassDescriptor by ClassLookup(kotlinReflectScope)
-    val kProperty0: ClassDescriptor by ClassLookup(kotlinReflectScope)
-    val kProperty1: ClassDescriptor by ClassLookup(kotlinReflectScope)
-    val kProperty2: ClassDescriptor by ClassLookup(kotlinReflectScope)
-    val kMutableProperty0: ClassDescriptor by ClassLookup(kotlinReflectScope)
-    val kMutableProperty1: ClassDescriptor by ClassLookup(kotlinReflectScope)
-    val kMutableProperty2: ClassDescriptor by ClassLookup(kotlinReflectScope)
-    val kProperty0Impl: ClassDescriptor by ClassLookup(konanInternalScope)
-    val kProperty1Impl: ClassDescriptor by ClassLookup(konanInternalScope)
-    val kProperty2Impl: ClassDescriptor by ClassLookup(konanInternalScope)
-    val kMutableProperty0Impl: ClassDescriptor by ClassLookup(konanInternalScope)
-    val kMutableProperty1Impl: ClassDescriptor by ClassLookup(konanInternalScope)
-    val kMutableProperty2Impl: ClassDescriptor by ClassLookup(konanInternalScope)
-    val kLocalDelegatedPropertyImpl: ClassDescriptor by ClassLookup(konanInternalScope)
-    val kLocalDelegatedMutablePropertyImpl: ClassDescriptor by ClassLookup(konanInternalScope)
-
-    fun getKFunctionType(
-            annotations: Annotations,
-            receiverType: KotlinType?,
-            parameterTypes: List<KotlinType>,
-            returnType: KotlinType
-    ): KotlinType {
-        val arguments = getFunctionTypeArgumentProjections(receiverType, parameterTypes, returnType)
-        val classDescriptor = getKFunction(arguments.size - 1 /* return type */)
-        return KotlinTypeFactory.simpleNotNullType(annotations, classDescriptor, arguments)
-    }
-}
-
 internal class Context(config: KonanConfig) : KonanBackendContext(config) {
     lateinit var moduleDescriptor: ModuleDescriptor
 
     override val builtIns: KonanBuiltIns by lazy(PUBLICATION) { moduleDescriptor.builtIns as KonanBuiltIns }
 
     val specialDeclarationsFactory = SpecialDeclarationsFactory(this)
-    val reflectionTypes: ReflectionTypes by lazy(PUBLICATION) { ReflectionTypes(moduleDescriptor) }
+    override val reflectionTypes: ReflectionTypes by lazy(PUBLICATION) { ReflectionTypes(moduleDescriptor, FqName("konan.internal")) }
     private val vtableBuilders = mutableMapOf<ClassDescriptor, ClassVtablesBuilder>()
 
     fun getVtableBuilder(classDescriptor: ClassDescriptor) = vtableBuilders.getOrPut(classDescriptor) {
@@ -244,6 +171,9 @@ internal class Context(config: KonanConfig) : KonanBackendContext(config) {
     // But we have to wait until the code generation phase,
     // to dump this information into generated file.
     var serializedLinkData: LinkData? = null
+    val moduleEscapeAnalysisResult: ModuleEscapeAnalysisResult.ModuleEAResult.Builder by lazy {
+        ModuleEscapeAnalysisResult.ModuleEAResult.newBuilder()
+    }
 
     @Deprecated("")
     lateinit var psi2IrGeneratorContext: GeneratorContext
@@ -256,10 +186,10 @@ internal class Context(config: KonanConfig) : KonanBackendContext(config) {
             }
             field = module!!
 
-            ir = Ir(this, module)
+            ir = KonanIr(this, module)
         }
 
-    override lateinit var ir: Ir
+    override lateinit var ir: KonanIr
 
     override val irBuiltIns
         get() = ir.irModule.irBuiltins
@@ -286,6 +216,9 @@ internal class Context(config: KonanConfig) : KonanBackendContext(config) {
 
     var phase: KonanPhase? = null
     var depth: Int = 0
+
+    // Cache used for source offset->(line,column) mapping.
+    val fileEntryCache = mutableMapOf<String, SourceManager.FileEntry>()
 
     protected fun separator(title: String) {
         println("\n\n--- ${title} ----------------------\n")
@@ -330,17 +263,13 @@ internal class Context(config: KonanConfig) : KonanBackendContext(config) {
 
             override fun visitFile(declaration: IrFile) {
                 val fileEntry = declaration.fileEntry
-                declaration.acceptChildrenVoid(object:IrElementVisitorVoid {
-                    override fun visitElement(element: IrElement) {
-                        element.acceptChildrenVoid(this)
+                declaration.acceptChildren(object: IrElementVisitor<Unit, Int> {
+                    override fun visitElement(element: IrElement, data: Int) {
+                        for (i in 0..data) print("  ")
+                        println("${element.javaClass.name}: ${fileEntry.range(element)}")
+                        element.acceptChildren(this, data + 1)
                     }
-
-                    override fun visitFunction(declaration: IrFunction) {
-                        super.visitFunction(declaration)
-                        val descriptor = declaration.descriptor
-                        println("${descriptor.fqNameOrNull()?: descriptor.name}: ${fileEntry.range(declaration)}")
-                    }
-                })
+                }, 0)
             }
 
             fun SourceManager.FileEntry.range(element:IrElement):String {
@@ -424,7 +353,9 @@ internal class Context(config: KonanConfig) : KonanBackendContext(config) {
         return config.configuration.getBoolean(KonanConfigKeys.DEBUG)
     }
 
-    fun log(message: () -> String) {
+    fun shouldGenerateTestRunner(): Boolean = config.configuration.getBoolean(KonanConfigKeys.GENERATE_TEST_RUNNER)
+
+    override fun log(message: () -> String) {
         if (phase?.verbose ?: false) {
             println(message())
         }

@@ -14,24 +14,44 @@
  * limitations under the License.
  */
 
+
+import groovy.transform.stc.ClosureParams
+import groovy.transform.stc.ClosureSignatureHint
+import groovy.transform.stc.FirstParam
+import groovy.transform.stc.FromString
+import org.jetbrains.kotlin.konan.target.*
+import org.jetbrains.kotlin.konan.util.DependencyProcessor
+import static org.jetbrains.kotlin.konan.target.KonanTarget.*
+import org.jetbrains.kotlin.konan.properties.KonanProperties
+import org.jetbrains.kotlin.konan.properties.*
+
 buildscript {
+    apply from: "$rootDir/gradle/kotlinGradlePlugin.gradle"
+
     repositories {
-        mavenCentral()
         jcenter()
     }
-
-    dependencies {
-        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
-        classpath 'com.jfrog.bintray.gradle:gradle-bintray-plugin:1.7.3'
-    }
 }
-
-apply plugin: 'com.jfrog.bintray'
 
 configurations {
     kotlin_compiler_jar
     kotlin_compiler_pom
+    kotlin_compiler_src
+    kotlin_compiler_doc
+
+    kotlin_gradle_plugin_jar
+    kotlin_gradle_plugin_pom
+    kotlin_gradle_plugin_src
+    kotlin_gradle_plugin_doc
+
+    kotlin_stdlib_jdk8_jar
+    kotlin_stdlib_jdk8_pom
+    kotlin_stdlib_jdk8_src
+    kotlin_stdlib_jdk8_doc
 }
+
+def kotlinGradleModule = "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinGradlePluginVersion"
+def kotlinStdLibJdk8Module = "org.jetbrains.kotlin:kotlin-stdlib-jre8:$kotlinStdLibJdk8Version"
 
 // TODO: Check if we really need the our bintray mirror and delete the uploading code below if we don't.
 repositories {
@@ -41,70 +61,49 @@ repositories {
 dependencies {
     kotlin_compiler_jar "$kotlinCompilerModule@jar"
     kotlin_compiler_pom "$kotlinCompilerModule@pom"
+    kotlin_compiler_src "$kotlinCompilerModule:sources@jar"
+    kotlin_compiler_doc "$kotlinCompilerModule:javadoc@jar"
+
+    kotlin_gradle_plugin_jar "$kotlinGradleModule@jar"
+    kotlin_gradle_plugin_pom "$kotlinGradleModule@pom"
+    kotlin_gradle_plugin_src "$kotlinGradleModule:sources@jar"
+    kotlin_gradle_plugin_doc "$kotlinGradleModule:javadoc@jar"
+
+    kotlin_stdlib_jdk8_jar "$kotlinStdLibJdk8Module@jar"
+    kotlin_stdlib_jdk8_pom "$kotlinStdLibJdk8Module@pom"
+    kotlin_stdlib_jdk8_src "$kotlinStdLibJdk8Module:sources@jar"
+    kotlin_stdlib_jdk8_doc "$kotlinStdLibJdk8Module:javadoc@jar"
 }
 
-// Hack kotlin-compiler pom-file to resolve the dependency correctly.
-task generatePom(type: DefaultTask) {
-    def originalPom = configurations.kotlin_compiler_pom.singleFile
-    inputs.file(originalPom)
+def modules = ['compiler'     : kotlinCompilerModule,
+               'gradle_plugin': kotlinGradleModule,
+               'stdlib_jdk8'  : kotlinStdLibJdk8Module]
+def uploads = ['compiler', 'gradle_plugin', 'stdlib_jdk8']
+uploads.each { target ->
+    task("${target}Upload", type:GradleBuild) {
+        tasks = ['bintrayUpload']
+        buildFile project.file("upload.gradle")
+        dir project.projectDir
+        startParameter.projectProperties = [
+                'user'    :  "${project.hasProperty('bintrayUser') ? project['bintrayUser'] : System.getenv('BINTRAY_USER')}",
+                'key'     : "${ project.hasProperty('bintrayKey') ? project.property('bintrayKey') : System.getenv('BINTRAY_KEY')}",
+                'module'  : modules["${target}"],
+                'jar'     : project.configurations.getByName("kotlin_${target}_jar").files.collect {it.path},
+                'src'     : project.configurations.getByName("kotlin_${target}_src").files.collect {it.path},
+                'doc'     : project.configurations.getByName("kotlin_${target}_doc").files.collect {it.path},
+                'pom'     : project.configurations.getByName("kotlin_${target}_pom").files.collect {it.path},
+                'override': project.hasProperty("override") && project["override"]
 
-    def newPom = file("${temporaryDir.canonicalPath}/${originalPom.name}")
-    outputs.file(newPom)
-
-    doLast {
-        def xml = new XmlParser().parse(originalPom)
-        def parent = xml.children().find() { it.name().localPart == 'parent' } // <parent> </parent> section, not the parent node.
-        if (parent != null) {
-            def groupId = parent.groupId
-            def version = parent.version
-            xml.append(groupId)
-            xml.append(version)
-            xml.remove(parent)
-        }
-        new XmlNodePrinter(new PrintWriter(new FileWriter(newPom))).print(xml)
-    }
-}
-
-bintray {
-    user = project.hasProperty('bintrayUser') ? project.property('bintrayUser') : System.getenv('BINTRAY_USER')
-    key  = project.hasProperty('bintrayKey') ? project.property('bintrayKey') : System.getenv('BINTRAY_KEY')
-    pkg {
-        repo = 'kotlin-native-dependencies'
-        name = 'kotlin-compiler-builds'
-        userOrg = 'jetbrains'
-        publish = true
-        override = project.hasProperty("override")
-    }
-    filesSpec {
-        // kotlinCompilerModule@jar and @pom -> groupId/with/dots/replaced/by/slashes/artifactId/<major-version>-SNAPSHOT
-        // e.g. org.jetbrains.kotlin:kotlin-compiler:1.1-20170426.212805-507 -> org/jetbrains/kotlin/kotlin-compiler/1.1-SNAPSHOT
-        def (groupId, artifactId, version) = kotlinCompilerModule.tokenize(':')
-        def groupPath = groupId.replace('.', '/')
-        def artifactPath = artifactId
-        def versionPath =  "${version.tokenize('-')[0]}-SNAPSHOT"
-        from project.configurations.kotlin_compiler_jar.files
-        from generatePom.outputs.files
-        into "$groupPath/$artifactPath/$versionPath"
+        ]
     }
 }
 
 task update_kotlin_compiler(type: DefaultTask) {
-    dependsOn(bintrayUpload)
+    dependsOn compilerUpload, gradle_pluginUpload, stdlib_jdk8Upload
 }
 
 abstract class NativeDep extends DefaultTask {
-
-    private String getCurrentHostTarget() {
-        if (project.isMac() && project.isAmd64()) {
-            return 'darwin-macos'
-        } else if (project.isLinux() && project.isAmd64()) {
-            return 'linux-x86-64'
-        } else {
-            throw project.unsupportedPlatformException()
-        }
-    }
-
-    protected final String host = getCurrentHostTarget();
+    protected final String hostSystem = TargetManager.longerSystemName();
     String baseUrl = "https://jetbrains.bintray.com/kotlin-native-dependencies"
 
     @Input
@@ -115,7 +114,7 @@ abstract class NativeDep extends DefaultTask {
     }
 
     protected File getBaseOutDir() {
-        final File res = project.rootProject.file("dist/dependencies")
+        final File res = project.rootProject.ext.dependenciesDir
         res.mkdirs()
         return res
     }
@@ -163,63 +162,74 @@ class TgzNativeDep extends NativeDep {
 
 class HelperNativeDep extends TgzNativeDep {
 
-    public HelperNativeDep() {
-        dependsOn(':tools:helpers:jar')
-    }
+    Properties konanProperties = new Properties()
 
     @TaskAction
     public void downloadAndExtract() {
-        project.javaexec {
-            main = "org.jetbrains.kotlin.konan.MainKt"
-            classpath += project.findProject(':tools:helpers').getConfigurations().getByName("runtime")
-            classpath += project.findProject(':tools:helpers').getConfigurations().getByName("runtime").artifacts.files
-            args baseOutDir.canonicalPath, baseUrl, baseName
+        def downloader = new DependencyProcessor(baseOutDir, konanProperties, [baseName], baseUrl)
+        downloader.showInfo = false
+        downloader.run()
+    }
+}
+
+enum DependencyKind {
+    LLVM(            "llvm",            { it.llvmHome },       { "llvmDir" }        ),
+    GCC_TOOLCHAIN(   "gccToolchain",    { it.gccToolchain },   { "gccToolchainDir" }),
+    SYSROOT(         "sysroot",         { it.targetSysRoot }                        ),
+    LIBFFI(          "libffi",          { it.libffiDir }                            ),
+    TARGET_TOOLCHAIN("targetToolchain", { it.targetToolchain }                      )
+
+
+    DependencyKind(String name,
+            @ClosureParams(value = FromString.class, options = "KonanProperties") Closure<String> dirGetter,
+            @ClosureParams(value = FromString.class, options = "KonanTarget") Closure<String> propertyNameGetter =
+                           {target -> "${target.userName}${name.capitalize()}Dir"}) {
+        this.name = name
+        this.dirGetter = dirGetter
+        this.propertyNameGetter = propertyNameGetter
+    }
+
+    private String name
+    private Closure<String> dirGetter           // KonanProperties -> String
+    private Closure<String> propertyNameGetter  // KonanTarget -> String
+
+    String getDirectory(KonanProperties properties) {
+        return dirGetter(properties)
+    }
+
+    String getPropertyName(KonanTarget target) {
+        return propertyNameGetter(target)
+    }
+
+    String toString() { return name }
+}
+
+TargetManager.enabled.each { target ->
+    def konanProperties = new KonanProperties(target,
+            rootProject.ext.konanProperties,
+            rootProject.ext.dependenciesDir.canonicalPath
+    )
+
+    konanProperties.dependencies.each { dependency ->
+        if (tasks.findByName(dependency) == null) {
+            task "${dependency}"(type: HelperNativeDep) {
+                baseName = dependency
+                it.konanProperties = rootProject.ext.konanProperties
+            }
+        }
+    }
+
+    DependencyKind.values().each { kind ->
+        def dir = kind.getDirectory(konanProperties)
+        if (dir != null) {
+            def path = rootProject.ext.dependenciesDir.toPath()
+                    .resolve(dir).toFile()
+                    .canonicalPath
+            rootProject.ext.set(kind.getPropertyName(target), path)
         }
     }
 }
 
-task llvm(type: HelperNativeDep) {
-    baseName = "clang-llvm-$llvmVersion-$host"
-}
-
-if (isLinux()) {
-    task linuxLibffi(type: HelperNativeDep) {
-        baseName = "libffi-3.2.1-2-$host"
-    }
-    task gccToolchain(type: HelperNativeDep) {
-        baseName = "target-gcc-toolchain-3-$host"
-    }
-    task raspberryPiSysroot(type: HelperNativeDep) {
-        baseName = "target-sysroot-1-raspberrypi"
-    }
-    task raspberrypiLibffi(type: HelperNativeDep) {
-        baseName = "libffi-3.2.1-2-raspberrypi"
-    }
-} else {
-    task macbookLibffi(type: HelperNativeDep) {
-        baseName = "libffi-3.2.1-2-$host"
-    }
-    task macbookSysroot(type: HelperNativeDep) {
-        baseName = "target-sysroot-1-$host"
-    }
-    task iphoneSysroot(type: HelperNativeDep) {
-        baseName = "target-sysroot-2-darwin-ios"
-    }
-    task iphoneLibffi(type: HelperNativeDep) {
-        baseName = "libffi-3.2.1-2-darwin-ios"
-    }
-    // TODO: re-enable when we known how to bring the simulator
-    // sysroot to dependencies.
-    //    task iphoneSimSysroot(type: TgzNativeDep) {
-    //       baseName = "target-sysroot-1-darwin-ios-sim"
-    //  }
-}
-
-
 task update(type: Copy) {
     dependsOn tasks.withType(NativeDep)
-}
-
-tasks.withType(TgzNativeDep) {
-    rootProject.ext.set("${name}Dir", outputDir.path)
 }

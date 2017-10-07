@@ -14,16 +14,17 @@
  * limitations under the License.
  */
 
-#include <stdio.h>
-
+#include "Alloc.h"
+#include "Exceptions.h"
 #include "Memory.h"
+#include "Porting.h"
 #include "Runtime.h"
 
 struct RuntimeState {
   MemoryState* memoryState;
 };
 
-typedef void (*Initializer)();
+typedef void (*Initializer)(int initialize);
 struct InitNode {
     Initializer      init;
     InitNode* next;
@@ -34,19 +35,19 @@ namespace {
 InitNode* initHeadNode = nullptr;
 InitNode* initTailNode = nullptr;
 
-void InitGlobalVariables() {
+void InitOrDeinitGlobalVariables(int initialize) {
   InitNode *currNode = initHeadNode;
   while (currNode != nullptr) {
-    currNode->init();
+    currNode->init(initialize);
     currNode = currNode->next;
   }
 }
 
+THREAD_LOCAL_VARIABLE RuntimeState* runtimeState = nullptr;
+
 }  // namespace
 
-#ifdef __cplusplus
 extern "C" {
-#endif
 
 void AppendToInitializersTail(InitNode *next) {
   // TODO: use RuntimeState.
@@ -60,20 +61,37 @@ void AppendToInitializersTail(InitNode *next) {
 
 // TODO: properly use RuntimeState.
 RuntimeState* InitRuntime() {
-  RuntimeState* result = new RuntimeState();
+  SetKonanTerminateHandler();
+  RuntimeState* result = konanConstructInstance<RuntimeState>();
   result->memoryState = InitMemory();
   // Keep global variables in state as well.
-  InitGlobalVariables();
+  InitOrDeinitGlobalVariables(true);
+  konan::consoleInit();
+  runtimeState = result;
   return result;
 }
 
 void DeinitRuntime(RuntimeState* state) {
   if (state != nullptr) {
+    InitOrDeinitGlobalVariables(false);
     DeinitMemory(state->memoryState);
-    delete state;
+    konanDestructInstance(state);
   }
 }
 
-#ifdef __cplusplus
+void Kotlin_initRuntimeIfNeeded() {
+  if (runtimeState == nullptr) {
+    runtimeState = InitRuntime();
+    // Register runtime deinit function at thread cleanup.
+    konan::onThreadExit(Kotlin_deinitRuntimeIfNeeded);
+  }
 }
-#endif
+
+void Kotlin_deinitRuntimeIfNeeded() {
+  if (runtimeState != nullptr) {
+     DeinitRuntime(runtimeState);
+     runtimeState = nullptr;
+  }
+}
+
+}  // extern "C"

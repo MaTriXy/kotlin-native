@@ -36,8 +36,7 @@ inline KByte* ByteArrayAddressOfElementAt(ArrayHeader* obj, KInt index) {
   return reinterpret_cast<KByte*>(obj + 1) + index;
 }
 
-inline const KByte* ByteArrayAddressOfElementAt(
-    const ArrayHeader* obj, KInt index) {
+inline const KByte* ByteArrayAddressOfElementAt(const ArrayHeader* obj, KInt index) {
   return reinterpret_cast<const KByte*>(obj + 1) + index;
 }
 
@@ -45,9 +44,16 @@ inline KChar* CharArrayAddressOfElementAt(ArrayHeader* obj, KInt index) {
   return reinterpret_cast<KChar*>(obj + 1) + index;
 }
 
-inline const KChar* CharArrayAddressOfElementAt(
-    const ArrayHeader* obj, KInt index) {
+inline const KChar* CharArrayAddressOfElementAt(const ArrayHeader* obj, KInt index) {
   return reinterpret_cast<const KChar*>(obj + 1) + index;
+}
+
+inline KInt* IntArrayAddressOfElementAt(ArrayHeader* obj, KInt index) {
+  return reinterpret_cast<KInt*>(obj + 1) + index;
+}
+
+inline const KInt* IntArrayAddressOfElementAt(const ArrayHeader* obj, KInt index) {
+  return reinterpret_cast<const KInt*>(obj + 1) + index;
 }
 
 // Consider aligning of base to sizeof(T).
@@ -127,6 +133,9 @@ OBJ_GETTER(Kotlin_String_subSequence, KString thiz, KInt startIndex, KInt endInd
 OBJ_GETTER0(Kotlin_getCurrentStackTrace);
 
 OBJ_GETTER0(Kotlin_konan_internal_undefined);
+
+void Kotlin_konan_internal_GC_suspend(KRef);
+void Kotlin_konan_internal_GC_resume(KRef);
 
 #ifdef __cplusplus
 }

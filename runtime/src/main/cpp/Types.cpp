@@ -17,9 +17,7 @@
 #include "Types.h"
 #include "Exceptions.h"
 
-#ifdef __cplusplus
 extern "C" {
-#endif
 
 KBoolean IsInstance(const ObjHeader* obj, const TypeInfo* type_info) {
   // We assume null check is handled by caller.
@@ -52,6 +50,16 @@ void CheckInstance(const ObjHeader* obj, const TypeInfo* type_info) {
   ThrowClassCastException();
 }
 
-#ifdef __cplusplus
+KBoolean Kotlin_TypeInfo_isInstance(KConstRef obj, KNativePtr typeInfo) {
+  return IsInstance(obj, reinterpret_cast<const TypeInfo*>(typeInfo));
 }
-#endif
+
+OBJ_GETTER(Kotlin_TypeInfo_getPackageName, KNativePtr typeInfo) {
+  RETURN_OBJ(reinterpret_cast<const TypeInfo*>(typeInfo)->packageName_);
+}
+
+OBJ_GETTER(Kotlin_TypeInfo_getRelativeName, KNativePtr typeInfo) {
+  RETURN_OBJ(reinterpret_cast<const TypeInfo*>(typeInfo)->relativeName_);
+}
+
+}  // extern "C"

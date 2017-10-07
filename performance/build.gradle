@@ -1,0 +1,115 @@
+buildscript {
+    def rootProperties = new Properties()
+    rootProperties.load(new FileReader(project.file('../gradle.properties')))
+    rootProperties.each {k, v -> ext.set(k, v)}
+    repositories {
+
+        maven {
+            //TODO: this path should be removed!!
+            url "https://oss.sonatype.org/content/repositories/snapshots"
+        }
+        maven {
+            url rootProperties.kotlinCompilerRepo
+        }
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinGradlePluginVersion"
+        classpath files(project.file('../tools/kotlin-native-gradle-plugin/build/libs').listFiles().findAll{it.name.endsWith('.jar')}.collect().first().absolutePath)
+    }
+}
+
+repositories {
+    maven {
+        //TODO: this path should be removed!!
+        url "https://oss.sonatype.org/content/repositories/snapshots"
+    }
+    maven {
+        url kotlinCompilerRepo
+    }
+    mavenCentral()
+}
+
+//TODO: property
+def ringWarmup=1000
+def iterations=2000
+
+apply plugin: 'kotlin'
+apply plugin: 'application'
+apply plugin: 'konan'
+
+konanArtifacts {
+    Ring {
+        enableOptimization()
+    }
+}
+
+compileKotlin {
+    kotlinOptions.suppressWarnings = true
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
+}
+
+dependencies {
+    compile "org.jetbrains.kotlin:kotlin-stdlib-jre8:$kotlinStdLibJdk8Version"
+}
+
+task jvmRun(type: JavaExec) {
+    def output = new ByteArrayOutputStream()
+    classpath sourceSets.main.runtimeClasspath
+    main = "MainKt"
+    args "$ringWarmup", "$iterations"
+    standardOutput = output
+    doLast {
+        dumpReport('jvmReport', output)
+    }
+}
+
+private void dumpReport(String name, ByteArrayOutputStream output) {
+    new File("${buildDir.absolutePath}/${name}.txt").withOutputStream {
+        it.write(output.toByteArray())
+    }
+}
+
+task konanRun(type: Exec) {
+    def output = new ByteArrayOutputStream()
+    commandLine project.file("build/konan/bin/Ring.${gradle.startParameter.projectProperties.exe_suffix}").absolutePath, "$ringWarmup", "$iterations"
+    standardOutput = output
+    doLast {
+        dumpReport('konanReport', output)
+    }
+}
+
+startScripts{
+    setEnabled(false)
+}
+
+task bench(type:DefaultTask) {
+    dependsOn jvmRun
+    dependsOn konanRun
+
+    doLast {
+        def jvmReport = new Report(project.file("build/jvmReport.txt"))
+        def konanReport = new Report(project.file("build/konanReport.txt"))
+        jvmReport.report.each { k, v ->
+            def ratio = String.format('%.2f', konanReport.report[k]/v * 100)
+            println("$k : $ratio %")
+            if (System.getenv("TEAMCITY_BUILD_PROPERTIES_FILE") != null)
+                println("##teamcity[buildStatisticValue key='$k' value='$ratio']")
+        }
+    }
+}
+
+
+class Report {
+    def Map<String, Double> report = new HashMap()
+
+    Report(File path) {
+        path.readLines().drop(3).takeWhile { it.split(':').length == 2 }.each {
+            def p = it.split(':')
+            report.put(p[0].trim(), Double.parseDouble(p[1].trim()))
+        }
+    }
+}

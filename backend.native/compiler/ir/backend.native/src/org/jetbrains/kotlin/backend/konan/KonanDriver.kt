@@ -17,11 +17,10 @@
 package org.jetbrains.kotlin.backend.konan
 
 import org.jetbrains.kotlin.analyzer.AnalysisResult
-import org.jetbrains.kotlin.backend.common.messageCollector
 import org.jetbrains.kotlin.backend.common.validateIrModule
 import org.jetbrains.kotlin.backend.konan.ir.DeserializerDriver
+import org.jetbrains.kotlin.backend.konan.ir.KonanSymbols
 import org.jetbrains.kotlin.backend.konan.ir.ModuleIndex
-import org.jetbrains.kotlin.backend.konan.ir.Symbols
 import org.jetbrains.kotlin.backend.konan.llvm.emitLLVM
 import org.jetbrains.kotlin.backend.konan.serialization.KonanSerializationUtil
 import org.jetbrains.kotlin.backend.konan.serialization.markBackingFields
@@ -31,19 +30,6 @@ import org.jetbrains.kotlin.config.kotlinSourceRoots
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi2ir.Psi2IrConfiguration
 import org.jetbrains.kotlin.psi2ir.Psi2IrTranslator
-
-class NativeAnalyzer(
-        val environment: KotlinCoreEnvironment, 
-        val  sources: Collection<KtFile>, 
-        val  konanConfig: KonanConfig) : AnalyzerWithCompilerReport.Analyzer {
-
-    override fun  analyze(): AnalysisResult {
-        return TopDownAnalyzerFacadeForKonan.analyzeFiles(sources, konanConfig);
-    }
-
-    override fun reportEnvironmentErrors() {
-    }
-}
 
 public fun runTopLevelPhases(konanConfig: KonanConfig, environment: KotlinCoreEnvironment) {
 
@@ -69,8 +55,9 @@ public fun runTopLevelPhases(konanConfig: KonanConfig, environment: KotlinCoreEn
 
     phaser.phase(KonanPhase.FRONTEND) {
         // Build AST and binding info.
-        analyzerWithCompilerReport.analyzeAndReport(environment.getSourceFiles(),
-            NativeAnalyzer(environment, environment.getSourceFiles(), konanConfig))
+        analyzerWithCompilerReport.analyzeAndReport(environment.getSourceFiles()) {
+            TopDownAnalyzerFacadeForKonan.analyzeFiles(environment.getSourceFiles(), konanConfig)
+        }
         if (analyzerWithCompilerReport.hasErrors()) {
             throw KonanCompilationException()
         }
@@ -85,7 +72,7 @@ public fun runTopLevelPhases(konanConfig: KonanConfig, environment: KotlinCoreEn
         val generatorContext = translator.createGeneratorContext(context.moduleDescriptor, bindingContext)
         context.psi2IrGeneratorContext = generatorContext
 
-        val symbols = Symbols(context, generatorContext.symbolTable)
+        val symbols = KonanSymbols(context, generatorContext.symbolTable)
 
         val module = translator.generateModuleFragment(generatorContext, environment.getSourceFiles())
 
@@ -109,6 +96,7 @@ public fun runTopLevelPhases(konanConfig: KonanConfig, environment: KotlinCoreEn
         }
         phaser.phase(KonanPhase.BITCODE) {
             emitLLVM(context)
+            produceOutput(context)
         }
         // We always verify bitcode to prevent hard to debug bugs.
         context.verifyBitCode()

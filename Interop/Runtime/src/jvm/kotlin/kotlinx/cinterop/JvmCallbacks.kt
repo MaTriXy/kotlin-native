@@ -25,48 +25,12 @@ import kotlin.reflect.full.declaredMemberProperties
 import kotlin.reflect.full.isSubclassOf
 import kotlin.reflect.jvm.reflect
 
-/**
- * This class provides a way to create a stable handle to any Kotlin object.
- * Its [value] can be safely passed to native code e.g. to be received in a Kotlin callback.
- *
- * Any [StableObjPtr] should be manually [disposed][dispose]
- */
-data class StableObjPtr private constructor(val value: COpaquePointer) {
+internal fun createStablePointer(any: Any): COpaquePointer = newGlobalRef(any).toCPointer()!!
 
-    companion object {
+internal fun disposeStablePointer(pointer: COpaquePointer) = deleteGlobalRef(pointer.toLong())
 
-        /**
-         * Creates a handle for given object.
-         */
-        fun create(any: Any) = fromValue(newGlobalRef(any))
-
-        private fun fromValue(value: NativePtr) = fromValue(interpretCPointer(value)!!)
-
-        /**
-         * Creates [StableObjPtr] from given raw value.
-         *
-         * @param value must be a [value] of some [StableObjPtr]
-         */
-        fun fromValue(value: COpaquePointer) = StableObjPtr(value)
-
-        init {
-            loadCallbacksLibrary()
-        }
-    }
-
-    /**
-     * Disposes the handle. It must not be [used][get] after that.
-     */
-    fun dispose() {
-        deleteGlobalRef(value.rawValue)
-    }
-
-    /**
-     * Returns the object this handle was [created][create] for.
-     */
-    fun get(): Any = derefGlobalRef(value.rawValue)
-
-}
+@PublishedApi
+internal fun derefStablePointer(pointer: COpaquePointer): Any = derefGlobalRef(pointer.toLong())
 
 private fun getFieldCType(type: KType): CType<*> {
     val classifier = type.classifier
@@ -258,7 +222,7 @@ private fun createStaticCFunctionImpl(
     val impl: FfiClosureImpl = when (arity) {
         0 -> {
             val f = function as () -> Any?
-            ffiClosureImpl(returnType) { args ->
+            ffiClosureImpl(returnType) { _ ->
                 f()
             }
         }
@@ -379,22 +343,7 @@ private class Struct(val size: Long, val align: Int, elementTypes: List<CType<*>
 ) {
     override fun read(location: NativePtr) = interpretPointed<ByteVar>(location).readValue<CStructVar>(size, align)
 
-    override fun write(location: NativePtr, value: CValue<*>) {
-        // TODO: probably CValue must be redesigned.
-        val fakePlacement = object : NativePlacement {
-            var used = false
-            override fun alloc(size: Long, align: Int): NativePointed {
-                assert(!used)
-                assert (size == this@Struct.size)
-                assert (align == this@Struct.align)
-                used = true
-                return interpretPointed<ByteVar>(location)
-            }
-        }
-
-        value.getPointer(fakePlacement)
-        assert (fakePlacement.used)
-    }
+    override fun write(location: NativePtr, value: CValue<*>) = value.write(location)
 }
 
 private class CEnumType(private val rawValueCType: CType<Number>) : CType<CEnum>(rawValueCType.ffiType) {
@@ -415,16 +364,18 @@ private fun loadCallbacksLibrary() {
     System.loadLibrary("callbacks")
 }
 
+private val topLevelInitializer = loadCallbacksLibrary()
+
 
 /**
  * Reference to `ffi_type` struct instance.
  */
-internal class ffi_type(override val rawPtr: NativePtr) : COpaque
+internal class ffi_type(rawPtr: NativePtr) : COpaque(rawPtr)
 
 /**
  * Reference to `ffi_cif` struct instance.
  */
-internal class ffi_cif(override val rawPtr: NativePtr) : COpaque
+internal class ffi_cif(rawPtr: NativePtr) : COpaque(rawPtr)
 
 private external fun ffiTypeVoid(): Long
 private external fun ffiTypeUInt8(): Long

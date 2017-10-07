@@ -17,6 +17,7 @@
 package org.jetbrains.kotlin.backend.konan
 
 import org.jetbrains.kotlin.backend.konan.util.*
+import org.jetbrains.kotlin.konan.target.CompilerOutputKind
 
 enum class KonanPhase(val description: String,
                       vararg prerequisite: KonanPhase,
@@ -27,16 +28,20 @@ enum class KonanPhase(val description: String,
     /* */ SERIALIZER("Serialize descriptor tree and inline IR bodies"),
     /* */ BACKEND("All backend"),
     /* ... */ LOWER("IR Lowering"),
-    /* ... ... */ LOWER_INLINE_CONSTRUCTORS("Inline constructors transformation"),
-    /* ... ... */ LOWER_INLINE("Functions inlining", LOWER_INLINE_CONSTRUCTORS),
+    /* ... ... */ TEST_PROCESSOR("Unit test processor"),
+    /* ... ... */ LOWER_BEFORE_INLINE("Special operations processing before inlining"),
+    /* ... ... */ LOWER_INLINE_CONSTRUCTORS("Inline constructors transformation", LOWER_BEFORE_INLINE),
+    /* ... ... */ LOWER_INLINE("Functions inlining", LOWER_INLINE_CONSTRUCTORS, LOWER_BEFORE_INLINE),
     /* ... ... ...  */ DESERIALIZER("Deserialize inline bodies"),
+    /* ... ... */ LOWER_INTEROP_PART1("Interop lowering, part 1", LOWER_INLINE),
+    /* ... ... */ LOWER_FOR_LOOPS("For loops lowering"),
     /* ... ... */ LOWER_ENUMS("Enum classes lowering"),
     /* ... ... */ LOWER_DELEGATION("Delegation lowering"),
     /* ... ... */ LOWER_INITIALIZERS("Initializers lowering", LOWER_ENUMS),
     /* ... ... */ LOWER_SHARED_VARIABLES("Shared Variable Lowering", LOWER_INITIALIZERS),
-    /* ... ... */ LOWER_LOCAL_FUNCTIONS("Local Function Lowering", LOWER_SHARED_VARIABLES),
-    /* ... ... */ LOWER_INTEROP("Interop lowering", LOWER_LOCAL_FUNCTIONS),
-    /* ... ... */ LOWER_CALLABLES("Callable references Lowering", LOWER_INTEROP, LOWER_DELEGATION, LOWER_LOCAL_FUNCTIONS),
+    /* ... ... */ LOWER_CALLABLES("Callable references Lowering", LOWER_DELEGATION),
+    /* ... ... */ LOWER_LOCAL_FUNCTIONS("Local Function Lowering", LOWER_SHARED_VARIABLES, LOWER_CALLABLES),
+    /* ... ... */ LOWER_INTEROP_PART2("Interop lowering, part 2", LOWER_LOCAL_FUNCTIONS),
     /* ... ... */ LOWER_VARARG("Vararg lowering", LOWER_CALLABLES),
     /* ... ... */ LOWER_TAILREC("tailrec lowering", LOWER_LOCAL_FUNCTIONS),
     /* ... ... */ LOWER_FINALLY("Finally blocks lowering", LOWER_INITIALIZERS, LOWER_LOCAL_FUNCTIONS, LOWER_TAILREC),
@@ -48,11 +53,13 @@ enum class KonanPhase(val description: String,
     /* ... ... */ LOWER_TYPE_OPERATORS("Type operators lowering", LOWER_COROUTINES),
     /* ... ... */ BRIDGES_BUILDING("Bridges building", LOWER_COROUTINES),
     /* ... ... */ LOWER_STRING_CONCAT("String concatenation lowering"),
+    /* ... ... */ LOWER_DATA_CLASSES("Data classes lowering"),
     /* ... ... */ AUTOBOX("Autoboxing of primitive types", BRIDGES_BUILDING, LOWER_COROUTINES),
+    /* ... ... */ RETURNS_INSERTION("Returns insertion for Unit functions", AUTOBOX, LOWER_COROUTINES, LOWER_ENUMS),
     /* ... */ BITCODE("LLVM BitCode Generation"),
     /* ... ... */ RTTI("RTTI Generation"),
+    /* ... ... */ ESCAPE_ANALYSIS("Escape analysis"),
     /* ... ... */ CODEGEN("Code Generation"),
-    /* ... ... */ METADATOR("Metadata Generation"),
     /* ... ... */ BITCODE_LINKER("Bitcode linking"),
     /* */ LINK_STAGE("Link stage"),
     /* ... */ OBJECT_FILES("Bitcode to object file"),
@@ -75,8 +82,12 @@ object KonanPhases {
         with (config.configuration) { with (KonanConfigKeys) { 
 
             // Don't serialize anything to a final executable.
-            KonanPhase.SERIALIZER.enabled = getBoolean(NOLINK)
-            KonanPhase.METADATOR.enabled = getBoolean(NOLINK)
+            KonanPhase.SERIALIZER.enabled = 
+                (get(PRODUCE) == CompilerOutputKind.LIBRARY)
+            KonanPhase.LINK_STAGE.enabled = 
+                (get(PRODUCE) == CompilerOutputKind.PROGRAM)
+
+            KonanPhase.TEST_PROCESSOR.enabled = getBoolean(GENERATE_TEST_RUNNER)
 
             val disabled = get(DISABLED_PHASES)
             disabled?.forEach { phases[known(it)]!!.enabled = false }
@@ -86,10 +97,6 @@ object KonanPhases {
 
             val verbose = get(VERBOSE_PHASES)
             verbose?.forEach { phases[known(it)]!!.verbose = true }
-
-            if (get(NOLINK) ?: false ) {
-                KonanPhase.LINK_STAGE.enabled = false
-            }
         }}
     }
 

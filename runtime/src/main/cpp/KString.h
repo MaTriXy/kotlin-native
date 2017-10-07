@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef RUNTIME_STRING_H
-#define RUNTIME_STRING_H
+#ifndef RUNTIME_KSTRING_H
+#define RUNTIME_KSTRING_H
 
 #include "Common.h"
 #include "Memory.h"
@@ -33,4 +33,23 @@ OBJ_GETTER(CreateStringFromUtf8, const char* utf8, uint32_t size);
 }
 #endif
 
-#endif // RUNTIME_STRING_H
+template <typename T>
+int binarySearchRange(const T* array, int arrayLength, T needle) {
+  int bottom = 0;
+  int top = arrayLength - 1;
+  int middle = -1;
+  T value = 0;
+  while (bottom <= top) {
+    middle = (bottom + top) / 2;
+    value = array[middle];
+    if (needle > value)
+      bottom = middle + 1;
+    else if (needle == value)
+      return middle;
+    else
+      top = middle - 1;
+  }
+  return middle - (needle < value ? 1 : 0);
+}
+
+#endif // RUNTIME_KSTRING_H

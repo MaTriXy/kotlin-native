@@ -2,13 +2,16 @@ package kotlinx.cinterop
 
 import konan.internal.Intrinsic
 
-inline val pointerSize: Int
+@PublishedApi
+internal inline val pointerSize: Int
     get() = getPointerSize()
 
-@Intrinsic external fun getPointerSize(): Int
+@PublishedApi
+@Intrinsic internal external fun getPointerSize(): Int
 
 // TODO: do not use singleton because it leads to init-check on any access.
-object nativeMemUtils {
+@PublishedApi
+internal object nativeMemUtils {
     @Intrinsic external fun getByte(mem: NativePointed): Byte
     @Intrinsic external fun putByte(mem: NativePointed, value: Byte)
 
@@ -33,35 +36,59 @@ object nativeMemUtils {
     // TODO: optimize
     fun getByteArray(source: NativePointed, dest: ByteArray, length: Int) {
         val sourceArray = source.reinterpret<ByteVar>().ptr
-        for (index in 0 .. length - 1) {
+        var index = 0
+        while (index < length) {
             dest[index] = sourceArray[index]
+            ++index
         }
     }
 
     // TODO: optimize
     fun putByteArray(source: ByteArray, dest: NativePointed, length: Int) {
         val destArray = dest.reinterpret<ByteVar>().ptr
-        for (index in 0 .. length - 1) {
+        var index = 0
+        while (index < length) {
             destArray[index] = source[index]
+            ++index
+        }
+    }
+
+    // TODO: optimize
+    fun getCharArray(source: NativePointed, dest: CharArray, length: Int) {
+        val sourceArray = source.reinterpret<ShortVar>().ptr
+        var index = 0
+        while (index < length) {
+            dest[index] = sourceArray[index].toChar()
+            ++index
+        }
+    }
+
+    // TODO: optimize
+    fun putCharArray(source: CharArray, dest: NativePointed, length: Int) {
+        val destArray = dest.reinterpret<ShortVar>().ptr
+        var index = 0
+        while (index < length) {
+            destArray[index] = source[index].toShort()
+            ++index
         }
     }
 
     // TODO: optimize
     fun zeroMemory(dest: NativePointed, length: Int): Unit {
         val destArray = dest.reinterpret<ByteVar>().ptr
-        for (index in 0 .. length - 1) {
+        var index = 0
+        while (index < length) {
             destArray[index] = 0
+            ++index
         }
     }
-
-    private class NativeAllocated(override val rawPtr: NativePtr) : NativePointed
 
     fun alloc(size: Long, align: Int): NativePointed {
         val ptr = malloc(size, align)
         if (ptr == nativeNullPtr) {
             throw OutOfMemoryError("unable to allocate native memory")
         }
-        return interpretPointed<NativeAllocated>(ptr)
+        return interpretOpaquePointed(ptr)
     }
 
     fun free(mem: NativePtr) {
@@ -74,3 +101,6 @@ private external fun malloc(size: Long, align: Int): NativePtr
 
 @SymbolName("Kotlin_interop_free")
 private external fun cfree(ptr: NativePtr)
+
+@Intrinsic external fun readBits(ptr: NativePtr, offset: Long, size: Int, signed: Boolean): Long
+@Intrinsic external fun writeBits(ptr: NativePtr, offset: Long, size: Int, value: Long)

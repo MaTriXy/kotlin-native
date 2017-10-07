@@ -20,263 +20,6 @@ package clang
 
 import kotlinx.cinterop.*
 
-fun asctime(arg0: CValuesRef<tm>?): CPointer<ByteVar>? {
-    return memScoped {
-        val _arg0 = arg0?.getPointer(memScope).rawValue
-        val res = kni_asctime(_arg0)
-        interpretCPointer<ByteVar>(res)
-    }
-}
-
-private external fun kni_asctime(arg0: NativePtr): NativePtr
-
-fun clock(): clock_t {
-    val res = kni_clock()
-    return res
-}
-
-private external fun kni_clock(): Long
-
-fun ctime(arg0: CValuesRef<time_tVar>?): CPointer<ByteVar>? {
-    return memScoped {
-        val _arg0 = arg0?.getPointer(memScope).rawValue
-        val res = kni_ctime(_arg0)
-        interpretCPointer<ByteVar>(res)
-    }
-}
-
-private external fun kni_ctime(arg0: NativePtr): NativePtr
-
-fun difftime(arg0: time_t, arg1: time_t): Double {
-    val _arg0 = arg0
-    val _arg1 = arg1
-    val res = kni_difftime(_arg0, _arg1)
-    return res
-}
-
-private external fun kni_difftime(arg0: Long, arg1: Long): Double
-
-fun getdate(arg0: String?): CPointer<tm>? {
-    return memScoped {
-        val _arg0 = arg0?.cstr?.getPointer(memScope).rawValue
-        val res = kni_getdate(_arg0)
-        interpretCPointer<tm>(res)
-    }
-}
-
-private external fun kni_getdate(arg0: NativePtr): NativePtr
-
-fun gmtime(arg0: CValuesRef<time_tVar>?): CPointer<tm>? {
-    return memScoped {
-        val _arg0 = arg0?.getPointer(memScope).rawValue
-        val res = kni_gmtime(_arg0)
-        interpretCPointer<tm>(res)
-    }
-}
-
-private external fun kni_gmtime(arg0: NativePtr): NativePtr
-
-fun localtime(arg0: CValuesRef<time_tVar>?): CPointer<tm>? {
-    return memScoped {
-        val _arg0 = arg0?.getPointer(memScope).rawValue
-        val res = kni_localtime(_arg0)
-        interpretCPointer<tm>(res)
-    }
-}
-
-private external fun kni_localtime(arg0: NativePtr): NativePtr
-
-fun mktime(arg0: CValuesRef<tm>?): time_t {
-    return memScoped {
-        val _arg0 = arg0?.getPointer(memScope).rawValue
-        val res = kni_mktime(_arg0)
-        res
-    }
-}
-
-private external fun kni_mktime(arg0: NativePtr): Long
-
-fun strftime(arg0: CValuesRef<ByteVar>?, arg1: size_t, arg2: String?, arg3: CValuesRef<tm>?): size_t {
-    return memScoped {
-        val _arg0 = arg0?.getPointer(memScope).rawValue
-        val _arg1 = arg1
-        val _arg2 = arg2?.cstr?.getPointer(memScope).rawValue
-        val _arg3 = arg3?.getPointer(memScope).rawValue
-        val res = kni_strftime(_arg0, _arg1, _arg2, _arg3)
-        res
-    }
-}
-
-private external fun kni_strftime(arg0: NativePtr, arg1: Long, arg2: NativePtr, arg3: NativePtr): Long
-
-fun strptime(arg0: String?, arg1: String?, arg2: CValuesRef<tm>?): CPointer<ByteVar>? {
-    return memScoped {
-        val _arg0 = arg0?.cstr?.getPointer(memScope).rawValue
-        val _arg1 = arg1?.cstr?.getPointer(memScope).rawValue
-        val _arg2 = arg2?.getPointer(memScope).rawValue
-        val res = kni_strptime(_arg0, _arg1, _arg2)
-        interpretCPointer<ByteVar>(res)
-    }
-}
-
-private external fun kni_strptime(arg0: NativePtr, arg1: NativePtr, arg2: NativePtr): NativePtr
-
-fun time(arg0: CValuesRef<time_tVar>?): time_t {
-    return memScoped {
-        val _arg0 = arg0?.getPointer(memScope).rawValue
-        val res = kni_time(_arg0)
-        res
-    }
-}
-
-private external fun kni_time(arg0: NativePtr): Long
-
-fun tzset(): Unit {
-    val res = kni_tzset()
-    return res
-}
-
-private external fun kni_tzset(): Unit
-
-fun asctime_r(arg0: CValuesRef<tm>?, arg1: CValuesRef<ByteVar>?): CPointer<ByteVar>? {
-    return memScoped {
-        val _arg0 = arg0?.getPointer(memScope).rawValue
-        val _arg1 = arg1?.getPointer(memScope).rawValue
-        val res = kni_asctime_r(_arg0, _arg1)
-        interpretCPointer<ByteVar>(res)
-    }
-}
-
-private external fun kni_asctime_r(arg0: NativePtr, arg1: NativePtr): NativePtr
-
-fun ctime_r(arg0: CValuesRef<time_tVar>?, arg1: CValuesRef<ByteVar>?): CPointer<ByteVar>? {
-    return memScoped {
-        val _arg0 = arg0?.getPointer(memScope).rawValue
-        val _arg1 = arg1?.getPointer(memScope).rawValue
-        val res = kni_ctime_r(_arg0, _arg1)
-        interpretCPointer<ByteVar>(res)
-    }
-}
-
-private external fun kni_ctime_r(arg0: NativePtr, arg1: NativePtr): NativePtr
-
-fun gmtime_r(arg0: CValuesRef<time_tVar>?, arg1: CValuesRef<tm>?): CPointer<tm>? {
-    return memScoped {
-        val _arg0 = arg0?.getPointer(memScope).rawValue
-        val _arg1 = arg1?.getPointer(memScope).rawValue
-        val res = kni_gmtime_r(_arg0, _arg1)
-        interpretCPointer<tm>(res)
-    }
-}
-
-private external fun kni_gmtime_r(arg0: NativePtr, arg1: NativePtr): NativePtr
-
-fun localtime_r(arg0: CValuesRef<time_tVar>?, arg1: CValuesRef<tm>?): CPointer<tm>? {
-    return memScoped {
-        val _arg0 = arg0?.getPointer(memScope).rawValue
-        val _arg1 = arg1?.getPointer(memScope).rawValue
-        val res = kni_localtime_r(_arg0, _arg1)
-        interpretCPointer<tm>(res)
-    }
-}
-
-private external fun kni_localtime_r(arg0: NativePtr, arg1: NativePtr): NativePtr
-
-fun posix2time(arg0: time_t): time_t {
-    val _arg0 = arg0
-    val res = kni_posix2time(_arg0)
-    return res
-}
-
-private external fun kni_posix2time(arg0: Long): Long
-
-fun tzsetwall(): Unit {
-    val res = kni_tzsetwall()
-    return res
-}
-
-private external fun kni_tzsetwall(): Unit
-
-fun time2posix(arg0: time_t): time_t {
-    val _arg0 = arg0
-    val res = kni_time2posix(_arg0)
-    return res
-}
-
-private external fun kni_time2posix(arg0: Long): Long
-
-fun timelocal(arg0: CValuesRef<tm>?): time_t {
-    return memScoped {
-        val _arg0 = arg0?.getPointer(memScope).rawValue
-        val res = kni_timelocal(_arg0)
-        res
-    }
-}
-
-private external fun kni_timelocal(arg0: NativePtr): Long
-
-fun timegm(arg0: CValuesRef<tm>?): time_t {
-    return memScoped {
-        val _arg0 = arg0?.getPointer(memScope).rawValue
-        val res = kni_timegm(_arg0)
-        res
-    }
-}
-
-private external fun kni_timegm(arg0: NativePtr): Long
-
-fun nanosleep(__rqtp: CValuesRef<timespec>?, __rmtp: CValuesRef<timespec>?): Int {
-    return memScoped {
-        val ___rqtp = __rqtp?.getPointer(memScope).rawValue
-        val ___rmtp = __rmtp?.getPointer(memScope).rawValue
-        val res = kni_nanosleep(___rqtp, ___rmtp)
-        res
-    }
-}
-
-private external fun kni_nanosleep(__rqtp: NativePtr, __rmtp: NativePtr): Int
-
-fun clock_getres(__clock_id: clockid_t, __res: CValuesRef<timespec>?): Int {
-    return memScoped {
-        val ___clock_id = __clock_id
-        val ___res = __res?.getPointer(memScope).rawValue
-        val res = kni_clock_getres(___clock_id, ___res)
-        res
-    }
-}
-
-private external fun kni_clock_getres(__clock_id: Int, __res: NativePtr): Int
-
-fun clock_gettime(__clock_id: clockid_t, __tp: CValuesRef<timespec>?): Int {
-    return memScoped {
-        val ___clock_id = __clock_id
-        val ___tp = __tp?.getPointer(memScope).rawValue
-        val res = kni_clock_gettime(___clock_id, ___tp)
-        res
-    }
-}
-
-private external fun kni_clock_gettime(__clock_id: Int, __tp: NativePtr): Int
-
-fun clock_gettime_nsec_np(__clock_id: clockid_t): __uint64_t {
-    val ___clock_id = __clock_id
-    val res = kni_clock_gettime_nsec_np(___clock_id)
-    return res
-}
-
-private external fun kni_clock_gettime_nsec_np(__clock_id: Int): Long
-
-fun clock_settime(__clock_id: clockid_t, __tp: CValuesRef<timespec>?): Int {
-    return memScoped {
-        val ___clock_id = __clock_id
-        val ___tp = __tp?.getPointer(memScope).rawValue
-        val res = kni_clock_settime(___clock_id, ___tp)
-        res
-    }
-}
-
-private external fun kni_clock_settime(__clock_id: Int, __tp: NativePtr): Int
-
 fun clang_getCString(string: CValue<CXString>): CPointer<ByteVar>? {
     return memScoped {
         val _string = string.getPointer(memScope).rawValue
@@ -3219,541 +2962,87 @@ fun clang_Type_visitFields(T: CValue<CXType>, visitor: CXFieldVisitor?, client_d
 
 private external fun kni_clang_Type_visitFields(T: NativePtr, visitor: NativePtr, client_data: NativePtr): Int
 
-val __llvm__: Int = 1
-
-val __clang__: Int = 1
-
-val __clang_major__: Int = 3
-
-val __clang_minor__: Int = 9
-
-val __clang_patchlevel__: Int = 0
-
-val __GNUC_MINOR__: Int = 2
-
-val __GNUC_PATCHLEVEL__: Int = 1
-
-val __GNUC__: Int = 4
-
-val __GXX_ABI_VERSION: Int = 1002
-
-val __ATOMIC_RELAXED: Int = 0
-
-val __ATOMIC_CONSUME: Int = 1
-
-val __ATOMIC_ACQUIRE: Int = 2
-
-val __ATOMIC_RELEASE: Int = 3
-
-val __ATOMIC_ACQ_REL: Int = 4
-
-val __ATOMIC_SEQ_CST: Int = 5
-
-val __PRAGMA_REDEFINE_EXTNAME: Int = 1
-
-val __STRICT_ANSI__: Int = 1
-
-val __CONSTANT_CFSTRINGS__: Int = 1
-
-val __BLOCKS__: Int = 1
-
-val __ORDER_LITTLE_ENDIAN__: Int = 1234
-
-val __ORDER_BIG_ENDIAN__: Int = 4321
-
-val __ORDER_PDP_ENDIAN__: Int = 3412
-
-val __BYTE_ORDER__: Int = 1234
-
-val __LITTLE_ENDIAN__: Int = 1
-
-val _LP64: Int = 1
-
-val __LP64__: Int = 1
-
-val __CHAR_BIT__: Int = 8
-
-val __SCHAR_MAX__: Int = 127
-
-val __SHRT_MAX__: Int = 32767
-
-val __INT_MAX__: Int = 2147483647
-
-val __LONG_MAX__: Long = 9223372036854775807
-
-val __LONG_LONG_MAX__: Long = 9223372036854775807
-
-val __WCHAR_MAX__: Int = 2147483647
-
-val __INTMAX_MAX__: Long = 9223372036854775807
-
-val __SIZE_MAX__: Long = -1
-
-val __UINTMAX_MAX__: Long = -1
-
-val __PTRDIFF_MAX__: Long = 9223372036854775807
-
-val __INTPTR_MAX__: Long = 9223372036854775807
-
-val __UINTPTR_MAX__: Long = -1
-
-val __SIZEOF_DOUBLE__: Int = 8
-
-val __SIZEOF_FLOAT__: Int = 4
-
-val __SIZEOF_INT__: Int = 4
-
-val __SIZEOF_LONG__: Int = 8
-
-val __SIZEOF_LONG_DOUBLE__: Int = 16
-
-val __SIZEOF_LONG_LONG__: Int = 8
-
-val __SIZEOF_POINTER__: Int = 8
-
-val __SIZEOF_SHORT__: Int = 2
-
-val __SIZEOF_PTRDIFF_T__: Int = 8
-
-val __SIZEOF_SIZE_T__: Int = 8
-
-val __SIZEOF_WCHAR_T__: Int = 4
-
-val __SIZEOF_WINT_T__: Int = 4
-
-val __SIZEOF_INT128__: Int = 16
-
-val __INTMAX_WIDTH__: Int = 64
-
-val __PTRDIFF_WIDTH__: Int = 64
-
-val __INTPTR_WIDTH__: Int = 64
-
-val __SIZE_WIDTH__: Int = 64
-
-val __WCHAR_WIDTH__: Int = 32
-
-val __WINT_WIDTH__: Int = 32
-
-val __SIG_ATOMIC_WIDTH__: Int = 32
-
-val __SIG_ATOMIC_MAX__: Int = 2147483647
-
-val __UINTMAX_WIDTH__: Int = 64
-
-val __UINTPTR_WIDTH__: Int = 64
-
-val __FLT_DENORM_MIN__: Float = bitsToFloat(1) /* == 1.4E-45 */
-
-val __FLT_HAS_DENORM__: Int = 1
-
-val __FLT_DIG__: Int = 6
-
-val __FLT_DECIMAL_DIG__: Int = 9
-
-val __FLT_EPSILON__: Float = bitsToFloat(872415232) /* == 1.1920929E-7 */
-
-val __FLT_HAS_INFINITY__: Int = 1
-
-val __FLT_HAS_QUIET_NAN__: Int = 1
-
-val __FLT_MANT_DIG__: Int = 24
-
-val __FLT_MAX_10_EXP__: Int = 38
-
-val __FLT_MAX_EXP__: Int = 128
-
-val __FLT_MAX__: Float = bitsToFloat(2139095039) /* == 3.4028235E38 */
-
-val __FLT_MIN_10_EXP__: Int = -37
-
-val __FLT_MIN_EXP__: Int = -125
-
-val __FLT_MIN__: Float = bitsToFloat(8388608) /* == 1.17549435E-38 */
-
-val __DBL_DENORM_MIN__: Double = bitsToDouble(1) /* == 4.9E-324 */
-
-val __DBL_HAS_DENORM__: Int = 1
-
-val __DBL_DIG__: Int = 15
-
-val __DBL_DECIMAL_DIG__: Int = 17
-
-val __DBL_EPSILON__: Double = bitsToDouble(4372995238176751616) /* == 2.220446049250313E-16 */
-
-val __DBL_HAS_INFINITY__: Int = 1
-
-val __DBL_HAS_QUIET_NAN__: Int = 1
-
-val __DBL_MANT_DIG__: Int = 53
-
-val __DBL_MAX_10_EXP__: Int = 308
-
-val __DBL_MAX_EXP__: Int = 1024
-
-val __DBL_MAX__: Double = bitsToDouble(9218868437227405311) /* == 1.7976931348623157E308 */
-
-val __DBL_MIN_10_EXP__: Int = -307
-
-val __DBL_MIN_EXP__: Int = -1021
-
-val __DBL_MIN__: Double = bitsToDouble(4503599627370496) /* == 2.2250738585072014E-308 */
-
-
-val __LDBL_HAS_DENORM__: Int = 1
-
-val __LDBL_DIG__: Int = 18
-
-val __LDBL_DECIMAL_DIG__: Int = 21
-
-
-val __LDBL_HAS_INFINITY__: Int = 1
-
-val __LDBL_HAS_QUIET_NAN__: Int = 1
-
-val __LDBL_MANT_DIG__: Int = 64
-
-val __LDBL_MAX_10_EXP__: Int = 4932
-
-val __LDBL_MAX_EXP__: Int = 16384
-
-
-val __LDBL_MIN_10_EXP__: Int = -4931
-
-val __LDBL_MIN_EXP__: Int = -16381
-
-
-val __POINTER_WIDTH__: Int = 64
-
-val __BIGGEST_ALIGNMENT__: Int = 16
-
-val __UINT8_MAX__: Int = 255
-
-val __INT8_MAX__: Int = 127
-
-val __UINT16_MAX__: Int = 65535
-
-val __INT16_MAX__: Int = 32767
-
-val __UINT32_MAX__: Int = -1
-
-val __INT32_MAX__: Int = 2147483647
-
-val __UINT64_MAX__: Long = -1
-
-val __INT64_MAX__: Long = 9223372036854775807
-
-val __INT_LEAST8_MAX__: Int = 127
-
-val __UINT_LEAST8_MAX__: Int = 255
-
-val __INT_LEAST16_MAX__: Int = 32767
-
-val __UINT_LEAST16_MAX__: Int = 65535
-
-val __INT_LEAST32_MAX__: Int = 2147483647
-
-val __UINT_LEAST32_MAX__: Int = -1
-
-val __INT_LEAST64_MAX__: Long = 9223372036854775807
-
-val __UINT_LEAST64_MAX__: Long = -1
-
-val __INT_FAST8_MAX__: Int = 127
-
-val __UINT_FAST8_MAX__: Int = 255
-
-val __INT_FAST16_MAX__: Int = 32767
-
-val __UINT_FAST16_MAX__: Int = 65535
-
-val __INT_FAST32_MAX__: Int = 2147483647
-
-val __UINT_FAST32_MAX__: Int = -1
-
-val __INT_FAST64_MAX__: Long = 9223372036854775807
-
-val __UINT_FAST64_MAX__: Long = -1
-
-val __FINITE_MATH_ONLY__: Int = 0
-
-val __GNUC_STDC_INLINE__: Int = 1
-
-val __GCC_ATOMIC_TEST_AND_SET_TRUEVAL: Int = 1
-
-val __GCC_ATOMIC_BOOL_LOCK_FREE: Int = 2
-
-val __GCC_ATOMIC_CHAR_LOCK_FREE: Int = 2
-
-val __GCC_ATOMIC_CHAR16_T_LOCK_FREE: Int = 2
-
-val __GCC_ATOMIC_CHAR32_T_LOCK_FREE: Int = 2
-
-val __GCC_ATOMIC_WCHAR_T_LOCK_FREE: Int = 2
-
-val __GCC_ATOMIC_SHORT_LOCK_FREE: Int = 2
-
-val __GCC_ATOMIC_INT_LOCK_FREE: Int = 2
-
-val __GCC_ATOMIC_LONG_LOCK_FREE: Int = 2
-
-val __GCC_ATOMIC_LLONG_LOCK_FREE: Int = 2
-
-val __GCC_ATOMIC_POINTER_LOCK_FREE: Int = 2
-
-val __NO_INLINE__: Int = 1
-
-val __PIC__: Int = 2
-
-val __pic__: Int = 2
-
-val __FLT_EVAL_METHOD__: Int = 0
-
-val __FLT_RADIX__: Int = 2
-
-val __DECIMAL_DIG__: Int = 21
-
-val __SSP__: Int = 1
-
-val __amd64__: Int = 1
-
-val __amd64: Int = 1
-
-val __x86_64: Int = 1
-
-val __x86_64__: Int = 1
-
-val __core2: Int = 1
-
-val __core2__: Int = 1
-
-val __tune_core2__: Int = 1
-
-val __NO_MATH_INLINES: Int = 1
-
-val __FXSR__: Int = 1
-
-val __GCC_HAVE_SYNC_COMPARE_AND_SWAP_16: Int = 1
-
-val __SSSE3__: Int = 1
-
-val __SSE3__: Int = 1
-
-val __SSE2__: Int = 1
-
-val __SSE2_MATH__: Int = 1
-
-val __SSE__: Int = 1
-
-val __SSE_MATH__: Int = 1
-
-val __MMX__: Int = 1
-
-val __GCC_HAVE_SYNC_COMPARE_AND_SWAP_1: Int = 1
-
-val __GCC_HAVE_SYNC_COMPARE_AND_SWAP_2: Int = 1
-
-val __GCC_HAVE_SYNC_COMPARE_AND_SWAP_4: Int = 1
-
-val __GCC_HAVE_SYNC_COMPARE_AND_SWAP_8: Int = 1
-
-val __APPLE_CC__: Int = 6000
-
-val __APPLE__: Int = 1
-
-val OBJC_NEW_PROPERTIES: Int = 1
-
-val __DYNAMIC__: Int = 1
-
-val __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__: Int = 101100
-
-val __MACH__: Int = 1
-
-val __STDC__: Int = 1
-
-val __STDC_HOSTED__: Int = 1
-
-val __STDC_VERSION__: Long = 199901
-
-val __STDC_UTF_16__: Int = 1
-
-val __STDC_UTF_32__: Int = 1
-
-val __DARWIN_ONLY_64_BIT_INO_T: Int = 0
-
-val __DARWIN_ONLY_VERS_1050: Int = 0
-
-val __DARWIN_ONLY_UNIX_CONFORMANCE: Int = 1
-
-val __DARWIN_UNIX03: Int = 1
-
-val __DARWIN_64_BIT_INO_T: Int = 1
-
-val __DARWIN_VERS_1050: Int = 1
-
-val __DARWIN_NON_CANCELABLE: Int = 0
-
-val __DARWIN_C_ANSI: Long = 4096
-
-val __DARWIN_C_FULL: Long = 900000
-
-val __DARWIN_C_LEVEL: Long = 900000
-
-val _DARWIN_FEATURE_64_BIT_INODE: Int = 1
-
-val _DARWIN_FEATURE_ONLY_UNIX_CONFORMANCE: Int = 1
-
-val _DARWIN_FEATURE_UNIX_CONFORMANCE: Int = 3
-
-val __PTHREAD_SIZE__: Int = 8176
-
-val __PTHREAD_ATTR_SIZE__: Int = 56
-
-val __PTHREAD_MUTEXATTR_SIZE__: Int = 8
-
-val __PTHREAD_MUTEX_SIZE__: Int = 56
-
-val __PTHREAD_CONDATTR_SIZE__: Int = 8
-
-val __PTHREAD_COND_SIZE__: Int = 40
-
-val __PTHREAD_ONCE_SIZE__: Int = 8
-
-val __PTHREAD_RWLOCK_SIZE__: Int = 192
-
-val __PTHREAD_RWLOCKATTR_SIZE__: Int = 16
-
-val __DARWIN_WCHAR_MAX: Int = 2147483647
-
-val __DARWIN_WCHAR_MIN: Int = -2147483648
-
-val __DARWIN_WEOF: __darwin_wint_t = -1
-
-val _FORTIFY_SOURCE: Int = 2
-
-val __MAC_10_0: Int = 1000
-
-val __MAC_10_1: Int = 1010
-
-val __MAC_10_2: Int = 1020
-
-val __MAC_10_3: Int = 1030
-
-val __MAC_10_4: Int = 1040
-
-val __MAC_10_5: Int = 1050
-
-val __MAC_10_6: Int = 1060
-
-val __MAC_10_7: Int = 1070
-
-val __MAC_10_8: Int = 1080
-
-val __MAC_10_9: Int = 1090
-
-val __MAC_10_10: Int = 101000
-
-val __MAC_10_10_2: Int = 101002
-
-val __MAC_10_10_3: Int = 101003
-
-val __MAC_10_11: Int = 101100
-
-val __MAC_10_11_2: Int = 101102
-
-val __MAC_10_11_3: Int = 101103
-
-val __MAC_10_11_4: Int = 101104
-
-val __MAC_10_12: Int = 101200
-
-val __IPHONE_2_0: Int = 20000
-
-val __IPHONE_2_1: Int = 20100
-
-val __IPHONE_2_2: Int = 20200
-
-val __IPHONE_3_0: Int = 30000
-
-val __IPHONE_3_1: Int = 30100
-
-val __IPHONE_3_2: Int = 30200
-
-val __IPHONE_4_0: Int = 40000
-
-val __IPHONE_4_1: Int = 40100
-
-val __IPHONE_4_2: Int = 40200
-
-val __IPHONE_4_3: Int = 40300
-
-val __IPHONE_5_0: Int = 50000
-
-val __IPHONE_5_1: Int = 50100
-
-val __IPHONE_6_0: Int = 60000
-
-val __IPHONE_6_1: Int = 60100
-
-val __IPHONE_7_0: Int = 70000
-
-val __IPHONE_7_1: Int = 70100
-
-val __IPHONE_8_0: Int = 80000
-
-val __IPHONE_8_1: Int = 80100
-
-val __IPHONE_8_2: Int = 80200
-
-val __IPHONE_8_3: Int = 80300
-
-val __IPHONE_8_4: Int = 80400
-
-val __IPHONE_9_0: Int = 90000
-
-val __IPHONE_9_1: Int = 90100
-
-val __IPHONE_9_2: Int = 90200
-
-val __IPHONE_9_3: Int = 90300
-
-val __IPHONE_10_0: Int = 100000
-
-val __TVOS_9_0: Int = 90000
-
-val __TVOS_9_1: Int = 90100
-
-val __TVOS_9_2: Int = 90200
-
-val __TVOS_10_0: Int = 100000
-
-val __WATCHOS_1_0: Int = 10000
-
-val __WATCHOS_2_0: Int = 20000
-
-val __WATCHOS_3_0: Int = 30000
-
-val __MAC_OS_X_VERSION_MIN_REQUIRED: Int = 101100
-
-val __MAC_OS_X_VERSION_MAX_ALLOWED: Int = 101200
-
-val CLOCKS_PER_SEC: Int = 1000000
-
-val CLOCK_REALTIME: Int = 0
-
-val CLOCK_MONOTONIC: Int = 6
-
-val CLOCK_MONOTONIC_RAW: Int = 4
-
-val CLOCK_MONOTONIC_RAW_APPROX: Int = 5
-
-val CLOCK_UPTIME_RAW: Int = 8
-
-val CLOCK_UPTIME_RAW_APPROX: Int = 9
-
-val CLOCK_PROCESS_CPUTIME_ID: Int = 12
-
-val CLOCK_THREAD_CPUTIME_ID: Int = 16
+fun clang_Cursor_getAttributeSpelling(cursor: CValue<CXCursor>): CPointer<ByteVar>? {
+    return memScoped {
+        val _cursor = cursor.getPointer(memScope).rawValue
+        val res = kni_clang_Cursor_getAttributeSpelling(_cursor)
+        interpretCPointer<ByteVar>(res)
+    }
+}
+
+private external fun kni_clang_Cursor_getAttributeSpelling(cursor: NativePtr): NativePtr
+
+fun clang_getDeclTypeAttributes(cursor: CValue<CXCursor>): CValue<CXTypeAttributes> {
+    return memScoped {
+        val _cursor = cursor.getPointer(memScope).rawValue
+        val res = kni_clang_getDeclTypeAttributes(_cursor, alloc<CXTypeAttributes>().rawPtr)
+        interpretPointed<CXTypeAttributes>(res).readValue()
+    }
+}
+
+private external fun kni_clang_getDeclTypeAttributes(cursor: NativePtr, retValPlacement: NativePtr): NativePtr
+
+fun clang_getResultTypeAttributes(typeAttributes: CValue<CXTypeAttributes>): CValue<CXTypeAttributes> {
+    return memScoped {
+        val _typeAttributes = typeAttributes.getPointer(memScope).rawValue
+        val res = kni_clang_getResultTypeAttributes(_typeAttributes, alloc<CXTypeAttributes>().rawPtr)
+        interpretPointed<CXTypeAttributes>(res).readValue()
+    }
+}
+
+private external fun kni_clang_getResultTypeAttributes(typeAttributes: NativePtr, retValPlacement: NativePtr): NativePtr
+
+fun clang_getCursorResultTypeAttributes(cursor: CValue<CXCursor>): CValue<CXTypeAttributes> {
+    return memScoped {
+        val _cursor = cursor.getPointer(memScope).rawValue
+        val res = kni_clang_getCursorResultTypeAttributes(_cursor, alloc<CXTypeAttributes>().rawPtr)
+        interpretPointed<CXTypeAttributes>(res).readValue()
+    }
+}
+
+private external fun kni_clang_getCursorResultTypeAttributes(cursor: NativePtr, retValPlacement: NativePtr): NativePtr
+
+fun clang_Type_getNullabilityKind(type: CValue<CXType>, attributes: CValue<CXTypeAttributes>): CXNullabilityKind {
+    return memScoped {
+        val _type = type.getPointer(memScope).rawValue
+        val _attributes = attributes.getPointer(memScope).rawValue
+        val res = kni_clang_Type_getNullabilityKind(_type, _attributes)
+        CXNullabilityKind.byValue(res)
+    }
+}
+
+private external fun kni_clang_Type_getNullabilityKind(type: NativePtr, attributes: NativePtr): Int
+
+fun clang_Type_getNumProtocols(type: CValue<CXType>): Int {
+    return memScoped {
+        val _type = type.getPointer(memScope).rawValue
+        val res = kni_clang_Type_getNumProtocols(_type)
+        res
+    }
+}
+
+private external fun kni_clang_Type_getNumProtocols(type: NativePtr): Int
+
+fun clang_Type_getProtocol(type: CValue<CXType>, index: Int): CValue<CXCursor> {
+    return memScoped {
+        val _type = type.getPointer(memScope).rawValue
+        val _index = index
+        val res = kni_clang_Type_getProtocol(_type, _index, alloc<CXCursor>().rawPtr)
+        interpretPointed<CXCursor>(res).readValue()
+    }
+}
+
+private external fun kni_clang_Type_getProtocol(type: NativePtr, index: Int, retValPlacement: NativePtr): NativePtr
+
+fun clang_Cursor_isObjCInitMethod(cursor: CValue<CXCursor>): Int {
+    return memScoped {
+        val _cursor = cursor.getPointer(memScope).rawValue
+        val res = kni_clang_Cursor_isObjCInitMethod(_cursor)
+        res
+    }
+}
+
+private external fun kni_clang_Cursor_isObjCInitMethod(cursor: NativePtr): Int
 
 val CINDEX_VERSION_MAJOR: Int = 0
 
@@ -3761,274 +3050,8 @@ val CINDEX_VERSION_MINOR: Int = 35
 
 val CINDEX_VERSION: Int = 35
 
-class __mbstate_t(override val rawPtr: NativePtr) : CStructVar() {
-    
-    companion object : Type(128, 8)
-    
-    @CLength(128)
-    val __mbstate8: CArrayPointer<ByteVar>
-        get() = arrayMemberAt(0)
-    
-    var _mbstateL: Long
-        get() = memberAt<LongVar>(0).value
-        set(value) { memberAt<LongVar>(0).value = value }
-    
-}
-
-class __va_list_tag(override val rawPtr: NativePtr) : CStructVar() {
-    
-    companion object : Type(24, 8)
-    
-    var gp_offset: Int
-        get() = memberAt<IntVar>(0).value
-        set(value) { memberAt<IntVar>(0).value = value }
-    
-    var fp_offset: Int
-        get() = memberAt<IntVar>(4).value
-        set(value) { memberAt<IntVar>(4).value = value }
-    
-    var overflow_arg_area: COpaquePointer?
-        get() = memberAt<COpaquePointerVar>(8).value
-        set(value) { memberAt<COpaquePointerVar>(8).value = value }
-    
-    var reg_save_area: COpaquePointer?
-        get() = memberAt<COpaquePointerVar>(16).value
-        set(value) { memberAt<COpaquePointerVar>(16).value = value }
-    
-}
-
-class __builtin_va_list(override val rawPtr: NativePtr) : CStructVar() {
-    
-    companion object : Type(24, 8)
-    
-}
-
-@CNaturalStruct("__routine", "__arg", "__next")
-class __darwin_pthread_handler_rec(override val rawPtr: NativePtr) : CStructVar() {
-    
-    companion object : Type(24, 8)
-    
-    var __routine: CPointer<CFunction<(COpaquePointer?) -> Unit>>?
-        get() = memberAt<CPointerVar<CFunction<(COpaquePointer?) -> Unit>>>(0).value
-        set(value) { memberAt<CPointerVar<CFunction<(COpaquePointer?) -> Unit>>>(0).value = value }
-    
-    var __arg: COpaquePointer?
-        get() = memberAt<COpaquePointerVar>(8).value
-        set(value) { memberAt<COpaquePointerVar>(8).value = value }
-    
-    var __next: CPointer<__darwin_pthread_handler_rec>?
-        get() = memberAt<CPointerVar<__darwin_pthread_handler_rec>>(16).value
-        set(value) { memberAt<CPointerVar<__darwin_pthread_handler_rec>>(16).value = value }
-    
-}
-
-@CNaturalStruct("__sig", "__opaque")
-class _opaque_pthread_attr_t(override val rawPtr: NativePtr) : CStructVar() {
-    
-    companion object : Type(64, 8)
-    
-    var __sig: Long
-        get() = memberAt<LongVar>(0).value
-        set(value) { memberAt<LongVar>(0).value = value }
-    
-    @CLength(56)
-    val __opaque: CArrayPointer<ByteVar>
-        get() = arrayMemberAt(8)
-    
-}
-
-@CNaturalStruct("__sig", "__opaque")
-class _opaque_pthread_cond_t(override val rawPtr: NativePtr) : CStructVar() {
-    
-    companion object : Type(48, 8)
-    
-    var __sig: Long
-        get() = memberAt<LongVar>(0).value
-        set(value) { memberAt<LongVar>(0).value = value }
-    
-    @CLength(40)
-    val __opaque: CArrayPointer<ByteVar>
-        get() = arrayMemberAt(8)
-    
-}
-
-@CNaturalStruct("__sig", "__opaque")
-class _opaque_pthread_condattr_t(override val rawPtr: NativePtr) : CStructVar() {
-    
-    companion object : Type(16, 8)
-    
-    var __sig: Long
-        get() = memberAt<LongVar>(0).value
-        set(value) { memberAt<LongVar>(0).value = value }
-    
-    @CLength(8)
-    val __opaque: CArrayPointer<ByteVar>
-        get() = arrayMemberAt(8)
-    
-}
-
-@CNaturalStruct("__sig", "__opaque")
-class _opaque_pthread_mutex_t(override val rawPtr: NativePtr) : CStructVar() {
-    
-    companion object : Type(64, 8)
-    
-    var __sig: Long
-        get() = memberAt<LongVar>(0).value
-        set(value) { memberAt<LongVar>(0).value = value }
-    
-    @CLength(56)
-    val __opaque: CArrayPointer<ByteVar>
-        get() = arrayMemberAt(8)
-    
-}
-
-@CNaturalStruct("__sig", "__opaque")
-class _opaque_pthread_mutexattr_t(override val rawPtr: NativePtr) : CStructVar() {
-    
-    companion object : Type(16, 8)
-    
-    var __sig: Long
-        get() = memberAt<LongVar>(0).value
-        set(value) { memberAt<LongVar>(0).value = value }
-    
-    @CLength(8)
-    val __opaque: CArrayPointer<ByteVar>
-        get() = arrayMemberAt(8)
-    
-}
-
-@CNaturalStruct("__sig", "__opaque")
-class _opaque_pthread_once_t(override val rawPtr: NativePtr) : CStructVar() {
-    
-    companion object : Type(16, 8)
-    
-    var __sig: Long
-        get() = memberAt<LongVar>(0).value
-        set(value) { memberAt<LongVar>(0).value = value }
-    
-    @CLength(8)
-    val __opaque: CArrayPointer<ByteVar>
-        get() = arrayMemberAt(8)
-    
-}
-
-@CNaturalStruct("__sig", "__opaque")
-class _opaque_pthread_rwlock_t(override val rawPtr: NativePtr) : CStructVar() {
-    
-    companion object : Type(200, 8)
-    
-    var __sig: Long
-        get() = memberAt<LongVar>(0).value
-        set(value) { memberAt<LongVar>(0).value = value }
-    
-    @CLength(192)
-    val __opaque: CArrayPointer<ByteVar>
-        get() = arrayMemberAt(8)
-    
-}
-
-@CNaturalStruct("__sig", "__opaque")
-class _opaque_pthread_rwlockattr_t(override val rawPtr: NativePtr) : CStructVar() {
-    
-    companion object : Type(24, 8)
-    
-    var __sig: Long
-        get() = memberAt<LongVar>(0).value
-        set(value) { memberAt<LongVar>(0).value = value }
-    
-    @CLength(16)
-    val __opaque: CArrayPointer<ByteVar>
-        get() = arrayMemberAt(8)
-    
-}
-
-@CNaturalStruct("__sig", "__cleanup_stack", "__opaque")
-class _opaque_pthread_t(override val rawPtr: NativePtr) : CStructVar() {
-    
-    companion object : Type(8192, 8)
-    
-    var __sig: Long
-        get() = memberAt<LongVar>(0).value
-        set(value) { memberAt<LongVar>(0).value = value }
-    
-    var __cleanup_stack: CPointer<__darwin_pthread_handler_rec>?
-        get() = memberAt<CPointerVar<__darwin_pthread_handler_rec>>(8).value
-        set(value) { memberAt<CPointerVar<__darwin_pthread_handler_rec>>(8).value = value }
-    
-    @CLength(8176)
-    val __opaque: CArrayPointer<ByteVar>
-        get() = arrayMemberAt(16)
-    
-}
-
-@CNaturalStruct("tv_sec", "tv_nsec")
-class timespec(override val rawPtr: NativePtr) : CStructVar() {
-    
-    companion object : Type(16, 8)
-    
-    var tv_sec: __darwin_time_t
-        get() = memberAt<__darwin_time_tVar>(0).value
-        set(value) { memberAt<__darwin_time_tVar>(0).value = value }
-    
-    var tv_nsec: Long
-        get() = memberAt<LongVar>(8).value
-        set(value) { memberAt<LongVar>(8).value = value }
-    
-}
-
-@CNaturalStruct("tm_sec", "tm_min", "tm_hour", "tm_mday", "tm_mon", "tm_year", "tm_wday", "tm_yday", "tm_isdst", "tm_gmtoff", "tm_zone")
-class tm(override val rawPtr: NativePtr) : CStructVar() {
-    
-    companion object : Type(56, 8)
-    
-    var tm_sec: Int
-        get() = memberAt<IntVar>(0).value
-        set(value) { memberAt<IntVar>(0).value = value }
-    
-    var tm_min: Int
-        get() = memberAt<IntVar>(4).value
-        set(value) { memberAt<IntVar>(4).value = value }
-    
-    var tm_hour: Int
-        get() = memberAt<IntVar>(8).value
-        set(value) { memberAt<IntVar>(8).value = value }
-    
-    var tm_mday: Int
-        get() = memberAt<IntVar>(12).value
-        set(value) { memberAt<IntVar>(12).value = value }
-    
-    var tm_mon: Int
-        get() = memberAt<IntVar>(16).value
-        set(value) { memberAt<IntVar>(16).value = value }
-    
-    var tm_year: Int
-        get() = memberAt<IntVar>(20).value
-        set(value) { memberAt<IntVar>(20).value = value }
-    
-    var tm_wday: Int
-        get() = memberAt<IntVar>(24).value
-        set(value) { memberAt<IntVar>(24).value = value }
-    
-    var tm_yday: Int
-        get() = memberAt<IntVar>(28).value
-        set(value) { memberAt<IntVar>(28).value = value }
-    
-    var tm_isdst: Int
-        get() = memberAt<IntVar>(32).value
-        set(value) { memberAt<IntVar>(32).value = value }
-    
-    var tm_gmtoff: Long
-        get() = memberAt<LongVar>(40).value
-        set(value) { memberAt<LongVar>(40).value = value }
-    
-    var tm_zone: CPointer<ByteVar>?
-        get() = memberAt<CPointerVar<ByteVar>>(48).value
-        set(value) { memberAt<CPointerVar<ByteVar>>(48).value = value }
-    
-}
-
 @CNaturalStruct("data", "private_flags")
-class CXString(override val rawPtr: NativePtr) : CStructVar() {
+class CXString(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(16, 8)
     
@@ -4043,7 +3066,7 @@ class CXString(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("Strings", "Count")
-class CXStringSet(override val rawPtr: NativePtr) : CStructVar() {
+class CXStringSet(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(16, 8)
     
@@ -4057,14 +3080,14 @@ class CXStringSet(override val rawPtr: NativePtr) : CStructVar() {
     
 }
 
-class CXVirtualFileOverlayImpl(override val rawPtr: NativePtr) : COpaque
+class CXVirtualFileOverlayImpl(rawPtr: NativePtr) : COpaque(rawPtr)
 
-class CXModuleMapDescriptorImpl(override val rawPtr: NativePtr) : COpaque
+class CXModuleMapDescriptorImpl(rawPtr: NativePtr) : COpaque(rawPtr)
 
-class CXTranslationUnitImpl(override val rawPtr: NativePtr) : COpaque
+class CXTranslationUnitImpl(rawPtr: NativePtr) : COpaque(rawPtr)
 
 @CNaturalStruct("Filename", "Contents", "Length")
-class CXUnsavedFile(override val rawPtr: NativePtr) : CStructVar() {
+class CXUnsavedFile(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(24, 8)
     
@@ -4083,7 +3106,7 @@ class CXUnsavedFile(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("Major", "Minor", "Subminor")
-class CXVersion(override val rawPtr: NativePtr) : CStructVar() {
+class CXVersion(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(12, 4)
     
@@ -4102,7 +3125,7 @@ class CXVersion(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("data")
-class CXFileUniqueID(override val rawPtr: NativePtr) : CStructVar() {
+class CXFileUniqueID(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(24, 8)
     
@@ -4113,7 +3136,7 @@ class CXFileUniqueID(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("ptr_data", "int_data")
-class CXSourceLocation(override val rawPtr: NativePtr) : CStructVar() {
+class CXSourceLocation(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(24, 8)
     
@@ -4128,7 +3151,7 @@ class CXSourceLocation(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("ptr_data", "begin_int_data", "end_int_data")
-class CXSourceRange(override val rawPtr: NativePtr) : CStructVar() {
+class CXSourceRange(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(24, 8)
     
@@ -4147,7 +3170,7 @@ class CXSourceRange(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("count", "ranges")
-class CXSourceRangeList(override val rawPtr: NativePtr) : CStructVar() {
+class CXSourceRangeList(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(16, 8)
     
@@ -4162,7 +3185,7 @@ class CXSourceRangeList(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("kind", "amount")
-class CXTUResourceUsageEntry(override val rawPtr: NativePtr) : CStructVar() {
+class CXTUResourceUsageEntry(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(16, 8)
     
@@ -4177,7 +3200,7 @@ class CXTUResourceUsageEntry(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("data", "numEntries", "entries")
-class CXTUResourceUsage(override val rawPtr: NativePtr) : CStructVar() {
+class CXTUResourceUsage(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(24, 8)
     
@@ -4196,7 +3219,7 @@ class CXTUResourceUsage(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("kind", "xdata", "data")
-class CXCursor(override val rawPtr: NativePtr) : CStructVar() {
+class CXCursor(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(32, 8)
     
@@ -4215,7 +3238,7 @@ class CXCursor(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("Platform", "Introduced", "Deprecated", "Obsoleted", "Unavailable", "Message")
-class CXPlatformAvailability(override val rawPtr: NativePtr) : CStructVar() {
+class CXPlatformAvailability(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(72, 8)
     
@@ -4240,10 +3263,10 @@ class CXPlatformAvailability(override val rawPtr: NativePtr) : CStructVar() {
     
 }
 
-class CXCursorSetImpl(override val rawPtr: NativePtr) : COpaque
+class CXCursorSetImpl(rawPtr: NativePtr) : COpaque(rawPtr)
 
 @CNaturalStruct("kind", "data")
-class CXType(override val rawPtr: NativePtr) : CStructVar() {
+class CXType(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(24, 8)
     
@@ -4258,7 +3281,7 @@ class CXType(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("int_data", "ptr_data")
-class CXToken(override val rawPtr: NativePtr) : CStructVar() {
+class CXToken(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(24, 8)
     
@@ -4273,7 +3296,7 @@ class CXToken(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("CursorKind", "CompletionString")
-class CXCompletionResult(override val rawPtr: NativePtr) : CStructVar() {
+class CXCompletionResult(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(16, 8)
     
@@ -4288,7 +3311,7 @@ class CXCompletionResult(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("Results", "NumResults")
-class CXCodeCompleteResults(override val rawPtr: NativePtr) : CStructVar() {
+class CXCodeCompleteResults(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(16, 8)
     
@@ -4303,7 +3326,7 @@ class CXCodeCompleteResults(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("context", "visit")
-class CXCursorAndRangeVisitor(override val rawPtr: NativePtr) : CStructVar() {
+class CXCursorAndRangeVisitor(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(16, 8)
     
@@ -4318,7 +3341,7 @@ class CXCursorAndRangeVisitor(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("ptr_data", "int_data")
-class CXIdxLoc(override val rawPtr: NativePtr) : CStructVar() {
+class CXIdxLoc(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(24, 8)
     
@@ -4333,7 +3356,7 @@ class CXIdxLoc(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("hashLoc", "filename", "file", "isImport", "isAngled", "isModuleImport")
-class CXIdxIncludedFileInfo(override val rawPtr: NativePtr) : CStructVar() {
+class CXIdxIncludedFileInfo(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(56, 8)
     
@@ -4363,7 +3386,7 @@ class CXIdxIncludedFileInfo(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("file", "module", "loc", "isImplicit")
-class CXIdxImportedASTFileInfo(override val rawPtr: NativePtr) : CStructVar() {
+class CXIdxImportedASTFileInfo(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(48, 8)
     
@@ -4385,7 +3408,7 @@ class CXIdxImportedASTFileInfo(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("kind", "cursor", "loc")
-class CXIdxAttrInfo(override val rawPtr: NativePtr) : CStructVar() {
+class CXIdxAttrInfo(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(64, 8)
     
@@ -4402,7 +3425,7 @@ class CXIdxAttrInfo(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("kind", "templateKind", "lang", "name", "USR", "cursor", "attributes", "numAttributes")
-class CXIdxEntityInfo(override val rawPtr: NativePtr) : CStructVar() {
+class CXIdxEntityInfo(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(80, 8)
     
@@ -4440,7 +3463,7 @@ class CXIdxEntityInfo(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("cursor")
-class CXIdxContainerInfo(override val rawPtr: NativePtr) : CStructVar() {
+class CXIdxContainerInfo(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(32, 8)
     
@@ -4450,7 +3473,7 @@ class CXIdxContainerInfo(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("attrInfo", "objcClass", "classCursor", "classLoc")
-class CXIdxIBOutletCollectionAttrInfo(override val rawPtr: NativePtr) : CStructVar() {
+class CXIdxIBOutletCollectionAttrInfo(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(72, 8)
     
@@ -4471,7 +3494,7 @@ class CXIdxIBOutletCollectionAttrInfo(override val rawPtr: NativePtr) : CStructV
 }
 
 @CNaturalStruct("entityInfo", "cursor", "loc", "semanticContainer", "lexicalContainer", "isRedeclaration", "isDefinition", "isContainer", "declAsContainer", "isImplicit", "attributes", "numAttributes", "flags")
-class CXIdxDeclInfo(override val rawPtr: NativePtr) : CStructVar() {
+class CXIdxDeclInfo(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(128, 8)
     
@@ -4528,7 +3551,7 @@ class CXIdxDeclInfo(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("declInfo", "kind")
-class CXIdxObjCContainerDeclInfo(override val rawPtr: NativePtr) : CStructVar() {
+class CXIdxObjCContainerDeclInfo(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(16, 8)
     
@@ -4543,7 +3566,7 @@ class CXIdxObjCContainerDeclInfo(override val rawPtr: NativePtr) : CStructVar() 
 }
 
 @CNaturalStruct("base", "cursor", "loc")
-class CXIdxBaseClassInfo(override val rawPtr: NativePtr) : CStructVar() {
+class CXIdxBaseClassInfo(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(64, 8)
     
@@ -4560,7 +3583,7 @@ class CXIdxBaseClassInfo(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("protocol", "cursor", "loc")
-class CXIdxObjCProtocolRefInfo(override val rawPtr: NativePtr) : CStructVar() {
+class CXIdxObjCProtocolRefInfo(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(64, 8)
     
@@ -4577,7 +3600,7 @@ class CXIdxObjCProtocolRefInfo(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("protocols", "numProtocols")
-class CXIdxObjCProtocolRefListInfo(override val rawPtr: NativePtr) : CStructVar() {
+class CXIdxObjCProtocolRefListInfo(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(16, 8)
     
@@ -4592,7 +3615,7 @@ class CXIdxObjCProtocolRefListInfo(override val rawPtr: NativePtr) : CStructVar(
 }
 
 @CNaturalStruct("containerInfo", "superInfo", "protocols")
-class CXIdxObjCInterfaceDeclInfo(override val rawPtr: NativePtr) : CStructVar() {
+class CXIdxObjCInterfaceDeclInfo(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(24, 8)
     
@@ -4611,7 +3634,7 @@ class CXIdxObjCInterfaceDeclInfo(override val rawPtr: NativePtr) : CStructVar() 
 }
 
 @CNaturalStruct("containerInfo", "objcClass", "classCursor", "classLoc", "protocols")
-class CXIdxObjCCategoryDeclInfo(override val rawPtr: NativePtr) : CStructVar() {
+class CXIdxObjCCategoryDeclInfo(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(80, 8)
     
@@ -4636,7 +3659,7 @@ class CXIdxObjCCategoryDeclInfo(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("declInfo", "getter", "setter")
-class CXIdxObjCPropertyDeclInfo(override val rawPtr: NativePtr) : CStructVar() {
+class CXIdxObjCPropertyDeclInfo(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(24, 8)
     
@@ -4655,7 +3678,7 @@ class CXIdxObjCPropertyDeclInfo(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("declInfo", "bases", "numBases")
-class CXIdxCXXClassDeclInfo(override val rawPtr: NativePtr) : CStructVar() {
+class CXIdxCXXClassDeclInfo(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(24, 8)
     
@@ -4674,7 +3697,7 @@ class CXIdxCXXClassDeclInfo(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("kind", "cursor", "loc", "referencedEntity", "parentEntity", "container")
-class CXIdxEntityRefInfo(override val rawPtr: NativePtr) : CStructVar() {
+class CXIdxEntityRefInfo(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(88, 8)
     
@@ -4703,7 +3726,7 @@ class CXIdxEntityRefInfo(override val rawPtr: NativePtr) : CStructVar() {
 }
 
 @CNaturalStruct("abortQuery", "diagnostic", "enteredMainFile", "ppIncludedFile", "importedASTFile", "startedTranslationUnit", "indexDeclaration", "indexEntityReference")
-class IndexerCallbacks(override val rawPtr: NativePtr) : CStructVar() {
+class IndexerCallbacks(rawPtr: NativePtr) : CStructVar(rawPtr) {
     
     companion object : Type(64, 8)
     
@@ -4741,17 +3764,16 @@ class IndexerCallbacks(override val rawPtr: NativePtr) : CStructVar() {
     
 }
 
-typealias clockid_tVar = IntVarOf<clockid_t>
-typealias clockid_t = Int
-
-val _CLOCK_REALTIME: clockid_t = 0
-val _CLOCK_MONOTONIC: clockid_t = 6
-val _CLOCK_MONOTONIC_RAW: clockid_t = 4
-val _CLOCK_MONOTONIC_RAW_APPROX: clockid_t = 5
-val _CLOCK_UPTIME_RAW: clockid_t = 8
-val _CLOCK_UPTIME_RAW_APPROX: clockid_t = 9
-val _CLOCK_PROCESS_CPUTIME_ID: clockid_t = 12
-val _CLOCK_THREAD_CPUTIME_ID: clockid_t = 16
+@CNaturalStruct("typeOpaquePtr")
+class CXTypeAttributes(rawPtr: NativePtr) : CStructVar(rawPtr) {
+    
+    companion object : Type(8, 8)
+    
+    var typeOpaquePtr: COpaquePointer?
+        get() = memberAt<COpaquePointerVar>(0).value
+        set(value) { memberAt<COpaquePointerVar>(0).value = value }
+    
+}
 
 enum class CXErrorCode(override val value: Int) : CEnum {
     CXError_Success(0),
@@ -4765,7 +3787,7 @@ enum class CXErrorCode(override val value: Int) : CEnum {
         fun byValue(value: Int) = CXErrorCode.values().find { it.value == value }!!
     }
     
-    class Var(override val rawPtr: NativePtr) : CEnumVar() {
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
         companion object : Type(IntVar.size.toInt())
         var value: CXErrorCode
             get() = byValue(this.reinterpret<IntVar>().value)
@@ -4784,7 +3806,7 @@ enum class CXAvailabilityKind(override val value: Int) : CEnum {
         fun byValue(value: Int) = CXAvailabilityKind.values().find { it.value == value }!!
     }
     
-    class Var(override val rawPtr: NativePtr) : CEnumVar() {
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
         companion object : Type(IntVar.size.toInt())
         var value: CXAvailabilityKind
             get() = byValue(this.reinterpret<IntVar>().value)
@@ -4812,7 +3834,7 @@ enum class CXDiagnosticSeverity(override val value: Int) : CEnum {
         fun byValue(value: Int) = CXDiagnosticSeverity.values().find { it.value == value }!!
     }
     
-    class Var(override val rawPtr: NativePtr) : CEnumVar() {
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
         companion object : Type(IntVar.size.toInt())
         var value: CXDiagnosticSeverity
             get() = byValue(this.reinterpret<IntVar>().value)
@@ -4831,7 +3853,7 @@ enum class CXLoadDiag_Error(override val value: Int) : CEnum {
         fun byValue(value: Int) = CXLoadDiag_Error.values().find { it.value == value }!!
     }
     
-    class Var(override val rawPtr: NativePtr) : CEnumVar() {
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
         companion object : Type(IntVar.size.toInt())
         var value: CXLoadDiag_Error
             get() = byValue(this.reinterpret<IntVar>().value)
@@ -4880,7 +3902,7 @@ enum class CXSaveError(override val value: Int) : CEnum {
         fun byValue(value: Int) = CXSaveError.values().find { it.value == value }!!
     }
     
-    class Var(override val rawPtr: NativePtr) : CEnumVar() {
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
         companion object : Type(IntVar.size.toInt())
         var value: CXSaveError
             get() = byValue(this.reinterpret<IntVar>().value)
@@ -4908,17 +3930,18 @@ enum class CXTUResourceUsageKind(override val value: Int) : CEnum {
     CXTUResourceUsage_PreprocessingRecord(12),
     CXTUResourceUsage_SourceManager_DataStructures(13),
     CXTUResourceUsage_Preprocessor_HeaderSearch(14),
-    CXTUResourceUsage_MEMORY_IN_BYTES_BEGIN(1),
-    CXTUResourceUsage_MEMORY_IN_BYTES_END(14),
-    CXTUResourceUsage_First(1),
-    CXTUResourceUsage_Last(14),
     ;
     
     companion object {
+        val CXTUResourceUsage_MEMORY_IN_BYTES_BEGIN = CXTUResourceUsage_AST
+        val CXTUResourceUsage_MEMORY_IN_BYTES_END = CXTUResourceUsage_Preprocessor_HeaderSearch
+        val CXTUResourceUsage_First = CXTUResourceUsage_AST
+        val CXTUResourceUsage_Last = CXTUResourceUsage_Preprocessor_HeaderSearch
+        
         fun byValue(value: Int) = CXTUResourceUsageKind.values().find { it.value == value }!!
     }
     
-    class Var(override val rawPtr: NativePtr) : CEnumVar() {
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
         companion object : Type(IntVar.size.toInt())
         var value: CXTUResourceUsageKind
             get() = byValue(this.reinterpret<IntVar>().value)
@@ -4966,9 +3989,6 @@ enum class CXCursorKind(override val value: Int) : CEnum {
     CXCursor_ObjCSynthesizeDecl(37),
     CXCursor_ObjCDynamicDecl(38),
     CXCursor_CXXAccessSpecifier(39),
-    CXCursor_FirstDecl(1),
-    CXCursor_LastDecl(39),
-    CXCursor_FirstRef(40),
     CXCursor_ObjCSuperClassRef(40),
     CXCursor_ObjCProtocolRef(41),
     CXCursor_ObjCClassRef(42),
@@ -4980,14 +4000,10 @@ enum class CXCursorKind(override val value: Int) : CEnum {
     CXCursor_LabelRef(48),
     CXCursor_OverloadedDeclRef(49),
     CXCursor_VariableRef(50),
-    CXCursor_LastRef(50),
-    CXCursor_FirstInvalid(70),
     CXCursor_InvalidFile(70),
     CXCursor_NoDeclFound(71),
     CXCursor_NotImplemented(72),
     CXCursor_InvalidCode(73),
-    CXCursor_LastInvalid(73),
-    CXCursor_FirstExpr(100),
     CXCursor_UnexposedExpr(100),
     CXCursor_DeclRefExpr(101),
     CXCursor_MemberRefExpr(102),
@@ -5037,8 +4053,6 @@ enum class CXCursorKind(override val value: Int) : CEnum {
     CXCursor_ObjCSelfExpr(146),
     CXCursor_OMPArraySectionExpr(147),
     CXCursor_ObjCAvailabilityCheckExpr(148),
-    CXCursor_LastExpr(148),
-    CXCursor_FirstStmt(200),
     CXCursor_UnexposedStmt(200),
     CXCursor_LabelStmt(201),
     CXCursor_CompoundStmt(202),
@@ -5055,7 +4069,6 @@ enum class CXCursorKind(override val value: Int) : CEnum {
     CXCursor_BreakStmt(213),
     CXCursor_ReturnStmt(214),
     CXCursor_GCCAsmStmt(215),
-    CXCursor_AsmStmt(215),
     CXCursor_ObjCAtTryStmt(216),
     CXCursor_ObjCAtCatchStmt(217),
     CXCursor_ObjCAtFinallyStmt(218),
@@ -5110,9 +4123,7 @@ enum class CXCursorKind(override val value: Int) : CEnum {
     CXCursor_OMPDistributeParallelForSimdDirective(267),
     CXCursor_OMPDistributeSimdDirective(268),
     CXCursor_OMPTargetParallelForSimdDirective(269),
-    CXCursor_LastStmt(269),
     CXCursor_TranslationUnit(300),
-    CXCursor_FirstAttr(400),
     CXCursor_UnexposedAttr(400),
     CXCursor_IBActionAttr(401),
     CXCursor_IBOutletAttr(402),
@@ -5133,27 +4144,40 @@ enum class CXCursorKind(override val value: Int) : CEnum {
     CXCursor_VisibilityAttr(417),
     CXCursor_DLLExport(418),
     CXCursor_DLLImport(419),
-    CXCursor_LastAttr(419),
     CXCursor_PreprocessingDirective(500),
     CXCursor_MacroDefinition(501),
     CXCursor_MacroExpansion(502),
-    CXCursor_MacroInstantiation(502),
     CXCursor_InclusionDirective(503),
-    CXCursor_FirstPreprocessing(500),
-    CXCursor_LastPreprocessing(503),
     CXCursor_ModuleImportDecl(600),
     CXCursor_TypeAliasTemplateDecl(601),
     CXCursor_StaticAssert(602),
-    CXCursor_FirstExtraDecl(600),
-    CXCursor_LastExtraDecl(602),
     CXCursor_OverloadCandidate(700),
     ;
     
     companion object {
+        val CXCursor_FirstDecl = CXCursor_UnexposedDecl
+        val CXCursor_LastDecl = CXCursor_CXXAccessSpecifier
+        val CXCursor_FirstRef = CXCursor_ObjCSuperClassRef
+        val CXCursor_LastRef = CXCursor_VariableRef
+        val CXCursor_FirstInvalid = CXCursor_InvalidFile
+        val CXCursor_LastInvalid = CXCursor_InvalidCode
+        val CXCursor_FirstExpr = CXCursor_UnexposedExpr
+        val CXCursor_LastExpr = CXCursor_ObjCAvailabilityCheckExpr
+        val CXCursor_FirstStmt = CXCursor_UnexposedStmt
+        val CXCursor_AsmStmt = CXCursor_GCCAsmStmt
+        val CXCursor_LastStmt = CXCursor_OMPTargetParallelForSimdDirective
+        val CXCursor_FirstAttr = CXCursor_UnexposedAttr
+        val CXCursor_LastAttr = CXCursor_DLLImport
+        val CXCursor_MacroInstantiation = CXCursor_MacroExpansion
+        val CXCursor_FirstPreprocessing = CXCursor_PreprocessingDirective
+        val CXCursor_LastPreprocessing = CXCursor_InclusionDirective
+        val CXCursor_FirstExtraDecl = CXCursor_ModuleImportDecl
+        val CXCursor_LastExtraDecl = CXCursor_StaticAssert
+        
         fun byValue(value: Int) = CXCursorKind.values().find { it.value == value }!!
     }
     
-    class Var(override val rawPtr: NativePtr) : CEnumVar() {
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
         companion object : Type(IntVar.size.toInt())
         var value: CXCursorKind
             get() = byValue(this.reinterpret<IntVar>().value)
@@ -5173,7 +4197,7 @@ enum class CXLinkageKind(override val value: Int) : CEnum {
         fun byValue(value: Int) = CXLinkageKind.values().find { it.value == value }!!
     }
     
-    class Var(override val rawPtr: NativePtr) : CEnumVar() {
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
         companion object : Type(IntVar.size.toInt())
         var value: CXLinkageKind
             get() = byValue(this.reinterpret<IntVar>().value)
@@ -5192,7 +4216,7 @@ enum class CXVisibilityKind(override val value: Int) : CEnum {
         fun byValue(value: Int) = CXVisibilityKind.values().find { it.value == value }!!
     }
     
-    class Var(override val rawPtr: NativePtr) : CEnumVar() {
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
         companion object : Type(IntVar.size.toInt())
         var value: CXVisibilityKind
             get() = byValue(this.reinterpret<IntVar>().value)
@@ -5211,7 +4235,7 @@ enum class CXLanguageKind(override val value: Int) : CEnum {
         fun byValue(value: Int) = CXLanguageKind.values().find { it.value == value }!!
     }
     
-    class Var(override val rawPtr: NativePtr) : CEnumVar() {
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
         companion object : Type(IntVar.size.toInt())
         var value: CXLanguageKind
             get() = byValue(this.reinterpret<IntVar>().value)
@@ -5251,8 +4275,6 @@ enum class CXTypeKind(override val value: Int) : CEnum {
     CXType_ObjCClass(28),
     CXType_ObjCSel(29),
     CXType_Float128(30),
-    CXType_FirstBuiltin(2),
-    CXType_LastBuiltin(29),
     CXType_Complex(100),
     CXType_Pointer(101),
     CXType_BlockPointer(102),
@@ -5276,10 +4298,13 @@ enum class CXTypeKind(override val value: Int) : CEnum {
     ;
     
     companion object {
+        val CXType_FirstBuiltin = CXType_Void
+        val CXType_LastBuiltin = CXType_ObjCSel
+        
         fun byValue(value: Int) = CXTypeKind.values().find { it.value == value }!!
     }
     
-    class Var(override val rawPtr: NativePtr) : CEnumVar() {
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
         companion object : Type(IntVar.size.toInt())
         var value: CXTypeKind
             get() = byValue(this.reinterpret<IntVar>().value)
@@ -5311,7 +4336,7 @@ enum class CXCallingConv(override val value: Int) : CEnum {
         fun byValue(value: Int) = CXCallingConv.values().find { it.value == value }!!
     }
     
-    class Var(override val rawPtr: NativePtr) : CEnumVar() {
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
         companion object : Type(IntVar.size.toInt())
         var value: CXCallingConv
             get() = byValue(this.reinterpret<IntVar>().value)
@@ -5336,7 +4361,7 @@ enum class CXTemplateArgumentKind(override val value: Int) : CEnum {
         fun byValue(value: Int) = CXTemplateArgumentKind.values().find { it.value == value }!!
     }
     
-    class Var(override val rawPtr: NativePtr) : CEnumVar() {
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
         companion object : Type(IntVar.size.toInt())
         var value: CXTemplateArgumentKind
             get() = byValue(this.reinterpret<IntVar>().value)
@@ -5371,7 +4396,7 @@ enum class CX_CXXAccessSpecifier(override val value: Int) : CEnum {
         fun byValue(value: Int) = CX_CXXAccessSpecifier.values().find { it.value == value }!!
     }
     
-    class Var(override val rawPtr: NativePtr) : CEnumVar() {
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
         companion object : Type(IntVar.size.toInt())
         var value: CX_CXXAccessSpecifier
             get() = byValue(this.reinterpret<IntVar>().value)
@@ -5394,7 +4419,7 @@ enum class CX_StorageClass(override val value: Int) : CEnum {
         fun byValue(value: Int) = CX_StorageClass.values().find { it.value == value }!!
     }
     
-    class Var(override val rawPtr: NativePtr) : CEnumVar() {
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
         companion object : Type(IntVar.size.toInt())
         var value: CX_StorageClass
             get() = byValue(this.reinterpret<IntVar>().value)
@@ -5412,7 +4437,7 @@ enum class CXChildVisitResult(override val value: Int) : CEnum {
         fun byValue(value: Int) = CXChildVisitResult.values().find { it.value == value }!!
     }
     
-    class Var(override val rawPtr: NativePtr) : CEnumVar() {
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
         companion object : Type(IntVar.size.toInt())
         var value: CXChildVisitResult
             get() = byValue(this.reinterpret<IntVar>().value)
@@ -5468,7 +4493,7 @@ enum class CXTokenKind(override val value: Int) : CEnum {
         fun byValue(value: Int) = CXTokenKind.values().find { it.value == value }!!
     }
     
-    class Var(override val rawPtr: NativePtr) : CEnumVar() {
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
         companion object : Type(IntVar.size.toInt())
         var value: CXTokenKind
             get() = byValue(this.reinterpret<IntVar>().value)
@@ -5504,7 +4529,7 @@ enum class CXCompletionChunkKind(override val value: Int) : CEnum {
         fun byValue(value: Int) = CXCompletionChunkKind.values().find { it.value == value }!!
     }
     
-    class Var(override val rawPtr: NativePtr) : CEnumVar() {
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
         companion object : Type(IntVar.size.toInt())
         var value: CXCompletionChunkKind
             get() = byValue(this.reinterpret<IntVar>().value)
@@ -5561,7 +4586,7 @@ enum class CXEvalResultKind(override val value: Int) : CEnum {
         fun byValue(value: Int) = CXEvalResultKind.values().find { it.value == value }!!
     }
     
-    class Var(override val rawPtr: NativePtr) : CEnumVar() {
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
         companion object : Type(IntVar.size.toInt())
         var value: CXEvalResultKind
             get() = byValue(this.reinterpret<IntVar>().value)
@@ -5578,7 +4603,7 @@ enum class CXVisitorResult(override val value: Int) : CEnum {
         fun byValue(value: Int) = CXVisitorResult.values().find { it.value == value }!!
     }
     
-    class Var(override val rawPtr: NativePtr) : CEnumVar() {
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
         companion object : Type(IntVar.size.toInt())
         var value: CXVisitorResult
             get() = byValue(this.reinterpret<IntVar>().value)
@@ -5596,7 +4621,7 @@ enum class CXResult(override val value: Int) : CEnum {
         fun byValue(value: Int) = CXResult.values().find { it.value == value }!!
     }
     
-    class Var(override val rawPtr: NativePtr) : CEnumVar() {
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
         companion object : Type(IntVar.size.toInt())
         var value: CXResult
             get() = byValue(this.reinterpret<IntVar>().value)
@@ -5638,7 +4663,7 @@ enum class CXIdxEntityKind(override val value: Int) : CEnum {
         fun byValue(value: Int) = CXIdxEntityKind.values().find { it.value == value }!!
     }
     
-    class Var(override val rawPtr: NativePtr) : CEnumVar() {
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
         companion object : Type(IntVar.size.toInt())
         var value: CXIdxEntityKind
             get() = byValue(this.reinterpret<IntVar>().value)
@@ -5698,170 +4723,23 @@ val CXIndexOpt_IndexImplicitTemplateInstantiations: CXIndexOptFlags = 4
 val CXIndexOpt_SuppressWarnings: CXIndexOptFlags = 8
 val CXIndexOpt_SkipParsedBodiesInSession: CXIndexOptFlags = 16
 
-typealias __int8_tVar = ByteVarOf<__int8_t>
-typealias __int8_t = Byte
-
-typealias __uint8_tVar = ByteVarOf<__uint8_t>
-typealias __uint8_t = Byte
-
-typealias __int16_tVar = ShortVarOf<__int16_t>
-typealias __int16_t = Short
-
-typealias __uint16_tVar = ShortVarOf<__uint16_t>
-typealias __uint16_t = Short
-
-typealias __int32_tVar = IntVarOf<__int32_t>
-typealias __int32_t = Int
-
-typealias __uint32_tVar = IntVarOf<__uint32_t>
-typealias __uint32_t = Int
-
-typealias __int64_tVar = LongVarOf<__int64_t>
-typealias __int64_t = Long
-
-typealias __uint64_tVar = LongVarOf<__uint64_t>
-typealias __uint64_t = Long
-
-typealias __darwin_intptr_tVar = LongVarOf<__darwin_intptr_t>
-typealias __darwin_intptr_t = Long
-
-typealias __darwin_natural_tVar = IntVarOf<__darwin_natural_t>
-typealias __darwin_natural_t = Int
-
-typealias __darwin_ct_rune_tVar = IntVarOf<__darwin_ct_rune_t>
-typealias __darwin_ct_rune_t = Int
-
-typealias __darwin_mbstate_t = __mbstate_t
-
-typealias __darwin_ptrdiff_tVar = LongVarOf<__darwin_ptrdiff_t>
-typealias __darwin_ptrdiff_t = Long
-
-typealias __darwin_size_tVar = LongVarOf<__darwin_size_t>
-typealias __darwin_size_t = Long
-
-typealias __darwin_va_listVar = CPointerVarOf<__darwin_va_list>
-typealias __darwin_va_list = CArrayPointer<__builtin_va_list>
-
-typealias __darwin_wchar_tVar = IntVarOf<__darwin_wchar_t>
-typealias __darwin_wchar_t = Int
-
-typealias __darwin_rune_tVar = IntVarOf<__darwin_rune_t>
-typealias __darwin_rune_t = __darwin_wchar_t
-
-typealias __darwin_wint_tVar = IntVarOf<__darwin_wint_t>
-typealias __darwin_wint_t = Int
-
-typealias __darwin_clock_tVar = LongVarOf<__darwin_clock_t>
-typealias __darwin_clock_t = Long
-
-typealias __darwin_socklen_tVar = IntVarOf<__darwin_socklen_t>
-typealias __darwin_socklen_t = __uint32_t
-
-typealias __darwin_ssize_tVar = LongVarOf<__darwin_ssize_t>
-typealias __darwin_ssize_t = Long
-
-typealias __darwin_time_tVar = LongVarOf<__darwin_time_t>
-typealias __darwin_time_t = Long
-
-typealias __darwin_blkcnt_tVar = LongVarOf<__darwin_blkcnt_t>
-typealias __darwin_blkcnt_t = __int64_t
-
-typealias __darwin_blksize_tVar = IntVarOf<__darwin_blksize_t>
-typealias __darwin_blksize_t = __int32_t
-
-typealias __darwin_dev_tVar = IntVarOf<__darwin_dev_t>
-typealias __darwin_dev_t = __int32_t
-
-typealias __darwin_fsblkcnt_tVar = IntVarOf<__darwin_fsblkcnt_t>
-typealias __darwin_fsblkcnt_t = Int
-
-typealias __darwin_fsfilcnt_tVar = IntVarOf<__darwin_fsfilcnt_t>
-typealias __darwin_fsfilcnt_t = Int
-
-typealias __darwin_gid_tVar = IntVarOf<__darwin_gid_t>
-typealias __darwin_gid_t = __uint32_t
-
-typealias __darwin_id_tVar = IntVarOf<__darwin_id_t>
-typealias __darwin_id_t = __uint32_t
-
-typealias __darwin_ino64_tVar = LongVarOf<__darwin_ino64_t>
-typealias __darwin_ino64_t = __uint64_t
-
-typealias __darwin_ino_tVar = LongVarOf<__darwin_ino_t>
-typealias __darwin_ino_t = __darwin_ino64_t
-
-typealias __darwin_mach_port_name_tVar = IntVarOf<__darwin_mach_port_name_t>
-typealias __darwin_mach_port_name_t = __darwin_natural_t
-
-typealias __darwin_mach_port_tVar = IntVarOf<__darwin_mach_port_t>
-typealias __darwin_mach_port_t = __darwin_mach_port_name_t
-
-typealias __darwin_mode_tVar = ShortVarOf<__darwin_mode_t>
-typealias __darwin_mode_t = __uint16_t
-
-typealias __darwin_off_tVar = LongVarOf<__darwin_off_t>
-typealias __darwin_off_t = __int64_t
-
-typealias __darwin_pid_tVar = IntVarOf<__darwin_pid_t>
-typealias __darwin_pid_t = __int32_t
-
-typealias __darwin_sigset_tVar = IntVarOf<__darwin_sigset_t>
-typealias __darwin_sigset_t = __uint32_t
-
-typealias __darwin_suseconds_tVar = IntVarOf<__darwin_suseconds_t>
-typealias __darwin_suseconds_t = __int32_t
-
-typealias __darwin_uid_tVar = IntVarOf<__darwin_uid_t>
-typealias __darwin_uid_t = __uint32_t
-
-typealias __darwin_useconds_tVar = IntVarOf<__darwin_useconds_t>
-typealias __darwin_useconds_t = __uint32_t
-
-typealias __darwin_uuid_tVar = CPointerVarOf<__darwin_uuid_t>
-typealias __darwin_uuid_t = CArrayPointer<ByteVar>
-
-typealias __darwin_uuid_string_tVar = CPointerVarOf<__darwin_uuid_string_t>
-typealias __darwin_uuid_string_t = CArrayPointer<ByteVar>
-
-typealias __darwin_pthread_attr_t = _opaque_pthread_attr_t
-
-typealias __darwin_pthread_cond_t = _opaque_pthread_cond_t
-
-typealias __darwin_pthread_condattr_t = _opaque_pthread_condattr_t
-
-typealias __darwin_pthread_key_tVar = LongVarOf<__darwin_pthread_key_t>
-typealias __darwin_pthread_key_t = Long
-
-typealias __darwin_pthread_mutex_t = _opaque_pthread_mutex_t
-
-typealias __darwin_pthread_mutexattr_t = _opaque_pthread_mutexattr_t
-
-typealias __darwin_pthread_once_t = _opaque_pthread_once_t
-
-typealias __darwin_pthread_rwlock_t = _opaque_pthread_rwlock_t
-
-typealias __darwin_pthread_rwlockattr_t = _opaque_pthread_rwlockattr_t
-
-typealias __darwin_pthread_tVar = CPointerVarOf<__darwin_pthread_t>
-typealias __darwin_pthread_t = CPointer<_opaque_pthread_t>
-
-typealias __darwin_nl_itemVar = IntVarOf<__darwin_nl_item>
-typealias __darwin_nl_item = Int
-
-typealias __darwin_wctrans_tVar = IntVarOf<__darwin_wctrans_t>
-typealias __darwin_wctrans_t = Int
-
-typealias __darwin_wctype_tVar = IntVarOf<__darwin_wctype_t>
-typealias __darwin_wctype_t = __uint32_t
-
-typealias clock_tVar = LongVarOf<clock_t>
-typealias clock_t = __darwin_clock_t
-
-typealias size_tVar = LongVarOf<size_t>
-typealias size_t = __darwin_size_t
-
-typealias time_tVar = LongVarOf<time_t>
-typealias time_t = __darwin_time_t
+enum class CXNullabilityKind(override val value: Int) : CEnum {
+    CXNullabilityKind_Nullable(0),
+    CXNullabilityKind_NonNull(1),
+    CXNullabilityKind_Unspecified(2),
+    ;
+    
+    companion object {
+        fun byValue(value: Int) = CXNullabilityKind.values().find { it.value == value }!!
+    }
+    
+    class Var(rawPtr: NativePtr) : CEnumVar(rawPtr) {
+        companion object : Type(IntVar.size.toInt())
+        var value: CXNullabilityKind
+            get() = byValue(this.reinterpret<IntVar>().value)
+            set(value) { this.reinterpret<IntVar>().value = value.value }
+    }
+}
 
 typealias CXVirtualFileOverlayVar = CPointerVarOf<CXVirtualFileOverlay>
 typealias CXVirtualFileOverlay = CPointer<CXVirtualFileOverlayImpl>
@@ -5880,6 +4758,12 @@ typealias CXClientData = COpaquePointer
 
 typealias CXFileVar = CPointerVarOf<CXFile>
 typealias CXFile = COpaquePointer
+
+typealias __darwin_time_tVar = LongVarOf<__darwin_time_t>
+typealias __darwin_time_t = Long
+
+typealias time_tVar = LongVarOf<time_t>
+typealias time_t = __darwin_time_t
 
 typealias CXDiagnosticVar = CPointerVarOf<CXDiagnostic>
 typealias CXDiagnostic = COpaquePointer

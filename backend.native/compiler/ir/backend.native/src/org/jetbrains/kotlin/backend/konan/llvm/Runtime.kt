@@ -36,14 +36,35 @@ class Runtime(bitcodeFile: String) {
     val methodTableRecordType = getStructType("MethodTableRecord")
     val globalHashType = getStructType("GlobalHash")
 
-    val containerHeaderType = getStructType("ContainerHeader")
     val objHeaderType = getStructType("ObjHeader")
+    val objHeaderPtrType = pointerType(objHeaderType)
     val arrayHeaderType = getStructType("ArrayHeader")
+
+    val frameOverlayType = getStructType("FrameOverlay")
 
     val target = LLVMGetTarget(llvmModule)!!.toKString()
 
+    // TODO: deduce TLS model from explicit config parameter.
+    val tlsMode by lazy {
+        when {
+            target.indexOf("android") != -1 -> LLVMThreadLocalMode.LLVMGeneralDynamicTLSModel
+            target.indexOf("wasm") != -1 -> LLVMThreadLocalMode.LLVMNotThreadLocal
+            else -> LLVMThreadLocalMode.LLVMLocalExecTLSModel
+        }
+    }
     val dataLayout = LLVMGetDataLayout(llvmModule)!!.toKString()
 
     val targetData = LLVMCreateTargetData(dataLayout)!!
 
+    val kotlinObjCClassInfo by lazy { getStructType("KotlinObjCClassInfo") }
+    val objCMethodDescription by lazy { getStructType("ObjCMethodDescription") }
+
+
+    val pointerSize: Int by lazy {
+        LLVMABISizeOfType(targetData, objHeaderPtrType).toInt()
+    }
+
+    val pointerAlignment: Int by lazy {
+        LLVMABIAlignmentOfType(targetData, objHeaderPtrType)
+    }
 }

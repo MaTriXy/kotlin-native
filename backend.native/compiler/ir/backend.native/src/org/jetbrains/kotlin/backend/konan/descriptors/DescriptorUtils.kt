@@ -16,6 +16,7 @@
 
 package org.jetbrains.kotlin.backend.konan.descriptors
 
+import org.jetbrains.kotlin.backend.common.atMostOne
 import org.jetbrains.kotlin.backend.konan.KonanBuiltIns
 import org.jetbrains.kotlin.backend.konan.ValueType
 import org.jetbrains.kotlin.backend.konan.isRepresentedAs
@@ -28,6 +29,7 @@ import org.jetbrains.kotlin.builtins.getFunctionalClassKind
 import org.jetbrains.kotlin.builtins.isFunctionType
 import org.jetbrains.kotlin.builtins.isSuspendFunctionType
 import org.jetbrains.kotlin.descriptors.*
+import org.jetbrains.kotlin.descriptors.annotations.AnnotationDescriptor
 import org.jetbrains.kotlin.incremental.components.NoLookupLocation
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
@@ -94,7 +96,8 @@ private val arrayTypes = setOf(
         "kotlin.LongArray",
         "kotlin.FloatArray",
         "kotlin.DoubleArray",
-        "kotlin.BooleanArray"
+        "kotlin.BooleanArray",
+        "konan.ImmutableBinaryBlob"
 )
 
 internal val ClassDescriptor.isIntrinsic: Boolean
@@ -115,33 +118,6 @@ private val konanInternalPackageName = FqName.fromSegments(listOf("konan", "inte
  */
 internal val KonanBuiltIns.konanInternal: MemberScope
     get() = this.builtInsModule.getPackage(konanInternalPackageName).memberScope
-
-/**
- * @return built-in class `konan.internal.$name` or
- * `null` if no such class is available (e.g. when compiling `link` test without stdlib).
- *
- * TODO: remove this workaround after removing compilation without stdlib.
- */
-internal fun KonanBuiltIns.getKonanInternalClassOrNull(name: String): ClassDescriptor? {
-    val classifier = konanInternal.getContributedClassifier(Name.identifier(name), NoLookupLocation.FROM_BACKEND)
-    return classifier as? ClassDescriptor
-}
-
-/**
- * @return built-in class `konan.internal.$name`
- */
-internal fun KonanBuiltIns.getKonanInternalClass(name: String): ClassDescriptor =
-        getKonanInternalClassOrNull(name) ?: TODO(name)
-
-internal fun KonanBuiltIns.getKonanInternalFunctions(name: String): List<FunctionDescriptor> {
-    return konanInternal.getContributedFunctions(Name.identifier(name), NoLookupLocation.FROM_BACKEND).toList()
-}
-
-internal val KotlinType.isFunctionOrKFunctionType: Boolean
-    get() {
-        val kind = constructor.declarationDescriptor?.getFunctionalClassKind()
-        return kind == FunctionClassDescriptor.Kind.Function || kind == FunctionClassDescriptor.Kind.KFunction
-    }
 
 internal val KotlinType.isKFunctionType: Boolean
     get() {
@@ -335,3 +311,11 @@ internal val FunctionDescriptor.needsInlining: Boolean
 internal val FunctionDescriptor.needsSerializedIr: Boolean 
     get() = (this.needsInlining && this.isExported())
 
+fun AnnotationDescriptor.getStringValueOrNull(name: String): String? {
+    val constantValue = this.allValueArguments.entries.atMostOne {
+        it.key.asString() == name
+    }?.value
+    return constantValue?.value as String?
+}
+
+fun AnnotationDescriptor.getStringValue(name: String): String = this.getStringValueOrNull(name)!!

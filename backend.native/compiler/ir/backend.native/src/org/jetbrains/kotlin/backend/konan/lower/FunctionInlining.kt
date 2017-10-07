@@ -18,16 +18,13 @@
 
 package org.jetbrains.kotlin.backend.konan.lower
 
-import org.jetbrains.kotlin.backend.common.DeepCopyIrTreeWithDescriptors
-import org.jetbrains.kotlin.backend.common.IrElementTransformerVoidWithContext
-import org.jetbrains.kotlin.backend.common.ScopeWithIr
-import org.jetbrains.kotlin.backend.common.reportWarning
+import org.jetbrains.kotlin.backend.common.*
 import org.jetbrains.kotlin.backend.konan.Context
 import org.jetbrains.kotlin.backend.konan.descriptors.isFunctionInvoke
 import org.jetbrains.kotlin.backend.konan.descriptors.needsInlining
 import org.jetbrains.kotlin.backend.konan.descriptors.resolveFakeOverride
 import org.jetbrains.kotlin.backend.konan.ir.DeserializerDriver
-import org.jetbrains.kotlin.backend.konan.ir.IrReturnableBlockImpl
+import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
 import org.jetbrains.kotlin.descriptors.FunctionDescriptor
 import org.jetbrains.kotlin.descriptors.ValueDescriptor
 import org.jetbrains.kotlin.descriptors.ValueParameterDescriptor
@@ -39,6 +36,7 @@ import org.jetbrains.kotlin.ir.declarations.getDefault
 import org.jetbrains.kotlin.ir.expressions.*
 import org.jetbrains.kotlin.ir.expressions.impl.IrGetValueImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrMemberAccessExpressionBase
+import org.jetbrains.kotlin.ir.expressions.impl.IrReturnableBlockImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrVarargImpl
 import org.jetbrains.kotlin.ir.visitors.IrElementTransformerVoid
 import org.jetbrains.kotlin.ir.visitors.transformChildrenVoid
@@ -52,17 +50,24 @@ import org.jetbrains.kotlin.types.TypeSubstitutor
 internal class FunctionInlining(val context: Context): IrElementTransformerVoidWithContext() {
 
     private val deserializer = DeserializerDriver(context)
+    private val globalSubstituteMap = mutableMapOf<DeclarationDescriptor, SubstitutedDescriptor>()
 
     //-------------------------------------------------------------------------//
 
-    fun inline(irModule: IrModuleFragment) = irModule.accept(this, null)
+    fun inline(irModule: IrModuleFragment): IrElement {
+        val transformedModule = irModule.accept(this, null)
+        transformedModule.transformChildrenVoid(
+                DescriptorSubstitutorForExternalScope(globalSubstituteMap)                  // Transform calls to object that might be returned from inline function call.
+        )
+        return transformedModule
+    }
 
     //-------------------------------------------------------------------------//
 
     override fun visitCall(expression: IrCall): IrExpression {
 
         val irCall = super.visitCall(expression) as IrCall
-        val functionDescriptor = irCall.descriptor as FunctionDescriptor
+        val functionDescriptor = irCall.descriptor
         if (!functionDescriptor.needsInlining) return irCall                                // This call does not need inlining.
 
         val functionDeclaration = getFunctionDeclaration(irCall)                            // Get declaration of the function to be inlined.
@@ -74,15 +79,15 @@ internal class FunctionInlining(val context: Context): IrElementTransformerVoidW
         }
 
         functionDeclaration.transformChildrenVoid(this)                                     // Process recursive inline.
-        val inliner = Inliner(currentScope!!, context)                                      // Create inliner for this scope.
-        return inliner.inline(irCall, functionDeclaration)                                  // Return newly created IrInlineBody instead of IrCall.
+        val inliner = Inliner(globalSubstituteMap, functionDeclaration, currentScope!!, context)    // Create inliner for this scope.
+        return inliner.inline(irCall )                                  // Return newly created IrInlineBody instead of IrCall.
     }
 
     //-------------------------------------------------------------------------//
 
     private fun getFunctionDeclaration(irCall: IrCall): IrFunction? {
 
-        val functionDescriptor = irCall.descriptor as FunctionDescriptor
+        val functionDescriptor = irCall.descriptor
         val originalDescriptor = functionDescriptor.resolveFakeOverride().original
         val functionDeclaration =
             context.ir.originalModuleIndex.functions[originalDescriptor] ?:                 // If function is declared in the current module.
@@ -97,19 +102,19 @@ internal class FunctionInlining(val context: Context): IrElementTransformerVoidW
 
 //-----------------------------------------------------------------------------//
 
-private class Inliner(val currentScope: ScopeWithIr, val context: Context) {
+private class Inliner(val globalSubstituteMap: MutableMap<DeclarationDescriptor, SubstitutedDescriptor>,
+                      val functionDeclaration: IrFunction,                                  // Function to substitute.
+                      val currentScope: ScopeWithIr,
+                      val context: Context) {
 
-    val copyIrElement = DeepCopyIrTreeWithDescriptors(currentScope.scope.scopeOwner, context) // Create DeepCopy for current scope.
+    val copyIrElement = DeepCopyIrTreeWithDescriptors(functionDeclaration.descriptor, context) // Create DeepCopy for current scope.
     val substituteMap = mutableMapOf<ValueDescriptor, IrExpression>()
 
     //-------------------------------------------------------------------------//
 
-    fun inline(irCall             : IrCall,                                                 // Call to be substituted.
-               functionDeclaration: IrFunction): IrReturnableBlockImpl {                    // Function to substitute.
-
+    fun inline(irCall: IrCall): IrReturnableBlockImpl {                                     // Call to be substituted.
         val inlineFunctionBody = inlineFunction(irCall, functionDeclaration)
-        val descriptorSubstitutor = copyIrElement.descriptorSubstitutorForExternalScope
-        currentScope.irElement.transformChildrenVoid(descriptorSubstitutor)                 // Transform calls to object that might be returned from inline function call.
+        copyIrElement.addCurrentSubstituteMap(globalSubstituteMap)
         return inlineFunctionBody
     }
 
@@ -127,13 +132,15 @@ private class Inliner(val currentScope: ScopeWithIr, val context: Context) {
 
         val statements = (copyFunctionDeclaration.body as IrBlockBody).statements           // IR statements from function copy.
         val returnType = copyFunctionDeclaration.descriptor.returnType!!                    // Substituted return type.
+        val sourceFileName = context.ir.originalModuleIndex.declarationToFile[functionDeclaration.descriptor.original]?:""
         val inlineFunctionBody = IrReturnableBlockImpl(                                     // Create new IR element to replace "call".
             startOffset = copyFunctionDeclaration.startOffset,
             endOffset   = copyFunctionDeclaration.endOffset,
             type        = returnType,
             descriptor  = copyFunctionDeclaration.descriptor.original,
             origin      = null,
-            statements  = statements
+            statements  = statements,
+            sourceFileName = sourceFileName
         )
 
         val transformer = ParameterSubstitutor()
@@ -193,34 +200,9 @@ private class Inliner(val currentScope: ScopeWithIr, val context: Context) {
 
     //-------------------------------------------------------------------------//
 
-    private fun isLambdaExpression(expression: IrExpression) : Boolean {
-        if (expression !is IrBlock)                                     return false        // Lambda mast be represented with IrBlock.
-        if (expression.origin != IrStatementOrigin.LAMBDA &&                                // Origin mast be LAMBDA or ANONYMOUS.
-            expression.origin != IrStatementOrigin.ANONYMOUS_FUNCTION)  return false
-
-        val statements          = expression.statements
-        val irFunction          = statements[0]
-        val irCallableReference = statements[1]
-        if (irFunction !is IrFunction)                   return false                       // First statement of the block must be lambda declaration.
-        if (irCallableReference !is IrCallableReference) return false                       // Second statement of the block must be CallableReference.
-        return true                                                                         // The expression represents lambda.
-    }
-
-    //-------------------------------------------------------------------------//
-
     private fun getLambdaFunction(lambdaArgument: IrBlock): IrFunction {
         val statements = lambdaArgument.statements
         return statements[0] as IrFunction
-    }
-
-    //-------------------------------------------------------------------------//
-
-    private fun argumentNeedsEvaluation(expression: IrExpression): Boolean {
-        if (expression is IrGetValue)          return false                                 // Parameter is already GetValue - nothing to evaluate.
-        if (expression is IrConst<*>)          return false                                 // Parameter is constant - nothing to evaluate.
-        if (expression is IrCallableReference) return false                                 // Parameter is callable reference - nothing to evaluate.
-        if (isLambdaExpression(expression))    return false                                 // Parameter is lambda - will be inlined.
-        return true
     }
 
     //-------------------------------------------------------------------------//
@@ -238,16 +220,38 @@ private class Inliner(val currentScope: ScopeWithIr, val context: Context) {
 
     //-------------------------------------------------------------------------//
 
-    private class ParameterToArgument(
-        val parameterDescriptor: ValueDescriptor,
-        val argumentExpression : IrExpression
-    )
+    private class ParameterToArgument(val parameterDescriptor: ValueDescriptor,
+                                      val argumentExpression : IrExpression) {
+        val needsEvaluation: Boolean
+            get() {
+                if (argumentExpression is IrGetValue) return false                         // Parameter is already GetValue - nothing to evaluate.
+                if (argumentExpression is IrConst<*>) return false                         // Parameter is constant - nothing to evaluate.
+                if (argumentExpression is IrCallableReference) return false                // Parameter is callable reference - nothing to evaluate.
+                if (isLambdaExpression(argumentExpression)
+                        && !(parameterDescriptor is ValueParameterDescriptor
+                        && parameterDescriptor.isNoinline)) return false                   // Parameter is lambda and it is not noInline - will be inlined.
+                return true
+            }
+
+        private fun isLambdaExpression(expression: IrExpression) : Boolean {
+            if (expression !is IrBlock)                                     return false    // Lambda mast be represented with IrBlock.
+            if (expression.origin != IrStatementOrigin.LAMBDA                               // Origin mast be LAMBDA or ANONYMOUS.
+                    && expression.origin != IrStatementOrigin.ANONYMOUS_FUNCTION)  return false
+
+            val statements          = expression.statements
+            val irFunction          = statements[0]
+            val irCallableReference = statements[1]
+            if (irFunction !is IrFunction)                   return false                   // First statement of the block must be lambda declaration.
+            if (irCallableReference !is IrCallableReference) return false                   // Second statement of the block must be CallableReference.
+            return true                                                                     // The expression represents lambda.
+        }
+    }
 
     //-------------------------------------------------------------------------//
 
     private fun buildParameterToArgument(irCall     : IrCall,                               // Call site.
                                          irFunction: IrFunction                             // Function to be called.
-    ): MutableList<ParameterToArgument> {
+    ): List<ParameterToArgument> {
 
         val parameterToArgument = mutableListOf<ParameterToArgument>()                      // Result list.
         val functionDescriptor = irFunction.descriptor.original                             // Descriptor of function to be called.
@@ -277,6 +281,7 @@ private class Inliner(val currentScope: ScopeWithIr, val context: Context) {
             valueArguments.add(0, irCall.extensionReceiver!!)
         }
 
+        val parametersWithDefaultToArgument = mutableListOf<ParameterToArgument>()
         functionDescriptor.valueParameters.forEach { parameterDescriptor ->                 // Iterate value parameter descriptors.
             val argument = valueArguments[parameterDescriptor.index]                        // Get appropriate argument from call site.
             when {
@@ -289,7 +294,7 @@ private class Inliner(val currentScope: ScopeWithIr, val context: Context) {
 
                 parameterDescriptor.hasDefaultValue() -> {                                  // There is no argument - try default value.
                     val defaultArgument = irFunction.getDefault(parameterDescriptor)!!
-                    parameterToArgument += ParameterToArgument(
+                    parametersWithDefaultToArgument += ParameterToArgument(
                         parameterDescriptor = parameterDescriptor,
                         argumentExpression  = defaultArgument.expression
                     )
@@ -315,7 +320,8 @@ private class Inliner(val currentScope: ScopeWithIr, val context: Context) {
                 }
             }
         }
-        return parameterToArgument
+        return parameterToArgument + parametersWithDefaultToArgument                        // All arguments except default are evaluated at callsite,
+                                                                                            // but default arguments are evaluated inside callee.
     }
 
     //-------------------------------------------------------------------------//
@@ -328,16 +334,16 @@ private class Inliner(val currentScope: ScopeWithIr, val context: Context) {
         val evaluationStatements   = mutableListOf<IrStatement>()                           // List of evaluation statements.
         parameterToArgumentOld.forEach {
             val parameterDescriptor = it.parameterDescriptor
-            val argumentExpression  = it.argumentExpression
 
-            if (!argumentNeedsEvaluation(argumentExpression)) {                             // If argument does not need evaluation
-                substituteMap[parameterDescriptor] = argumentExpression                     // Copy parameterDescriptor -> argumentExpression to new map.
+            if (!it.needsEvaluation) {                                                      // If argument does not need evaluation
+                substituteMap[parameterDescriptor] = it.argumentExpression                  // Copy parameterDescriptor -> argumentExpression to new map.
                 return@forEach
             }
 
-            val newExpression = copyIrElement.copy(argumentExpression, null) as IrExpression
             val newVariable = currentScope.scope.createTemporaryVariable(                   // Create new variable and init it with the parameter expression.
-                irExpression = newExpression,
+                irExpression = copyIrElement
+                        .copy(it.argumentExpression, typeSubstitutor = null)                // Clone expression.
+                        .transform(ParameterSubstitutor(), data = null) as IrExpression,    // Arguments may reference the previous ones - substitute them.
                 nameHint     = functionDeclaration.descriptor.name.toString(),
                 isMutable    = false)
 

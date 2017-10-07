@@ -18,16 +18,17 @@ package org.jetbrains.kotlin.backend.konan.lower
 
 import org.jetbrains.kotlin.backend.common.ClassLoweringPass
 import org.jetbrains.kotlin.backend.common.FileLoweringPass
+import org.jetbrains.kotlin.backend.common.deepCopyWithVariables
 import org.jetbrains.kotlin.backend.common.lower.SimpleMemberScope
 import org.jetbrains.kotlin.backend.common.runOnFilePostfix
 import org.jetbrains.kotlin.backend.jvm.descriptors.createValueParameter
 import org.jetbrains.kotlin.backend.konan.Context
 import org.jetbrains.kotlin.backend.konan.DECLARATION_ORIGIN_ENUM
 import org.jetbrains.kotlin.backend.konan.descriptors.synthesizedName
-import org.jetbrains.kotlin.backend.konan.ir.createArrayOfExpression
-import org.jetbrains.kotlin.backend.konan.ir.createFakeOverrideDescriptor
-import org.jetbrains.kotlin.backend.konan.ir.addSimpleDelegatingConstructor
-import org.jetbrains.kotlin.backend.konan.ir.createSimpleDelegatingConstructorDescriptor
+import org.jetbrains.kotlin.backend.common.ir.createArrayOfExpression
+import org.jetbrains.kotlin.backend.common.ir.createFakeOverrideDescriptor
+import org.jetbrains.kotlin.backend.common.ir.addSimpleDelegatingConstructor
+import org.jetbrains.kotlin.backend.common.ir.createSimpleDelegatingConstructorDescriptor
 import org.jetbrains.kotlin.descriptors.*
 import org.jetbrains.kotlin.descriptors.impl.ClassConstructorDescriptorImpl
 import org.jetbrains.kotlin.descriptors.impl.ClassDescriptorImpl
@@ -268,7 +269,7 @@ internal class EnumClassLowering(val context: Context) : ClassLoweringPass {
                 if (irConstructor != null) {
                     it.valueParameters.filter { it.declaresDefaultValue() }.forEach { argument ->
                         val loweredArgument = loweredEnumConstructor.valueParameters[argument.loweredIndex()]
-                        val body = irConstructor.getDefault(loweredArgument)!!
+                        val body = irConstructor.getDefault(loweredArgument)!!.deepCopyWithVariables()
                         body.transformChildrenVoid(ParameterMapper(constructor))
                         constructor.putDefault(constructorDescriptor.valueParameters[loweredArgument.index], body)
                     }
@@ -281,6 +282,8 @@ internal class EnumClassLowering(val context: Context) : ClassLoweringPass {
                     .filterNotNull()
                     .toList()
             defaultClassDescriptor.initialize(SimpleMemberScope(contributedDescriptors), constructors, null)
+
+            defaultClass.addFakeOverrides()
 
             return defaultClass
         }
@@ -394,7 +397,19 @@ internal class EnumClassLowering(val context: Context) : ClassLoweringPass {
 
             enumConstructor.descriptor.valueParameters.filter { it.declaresDefaultValue() }.forEach {
                 val body = enumConstructor.getDefault(it)!!
-                body.transformChildrenVoid(ParameterMapper(enumConstructor))
+                body.transformChildrenVoid(object: IrElementTransformerVoid() {
+                    override fun visitGetValue(expression: IrGetValue): IrExpression {
+                        val descriptor = expression.descriptor
+                        when (descriptor) {
+                            is ValueParameterDescriptor -> {
+                                return IrGetValueImpl(expression.startOffset,
+                                        expression.endOffset,
+                                        loweredEnumConstructor.valueParameters[descriptor.loweredIndex()].symbol)
+                            }
+                        }
+                        return expression
+                    }
+                })
                 loweredEnumConstructor.putDefault(loweredConstructorDescriptor.valueParameters[it.loweredIndex()], body)
                 descriptorToIrConstructorWithDefaultArguments[loweredConstructorDescriptor] = loweredEnumConstructor
             }

@@ -137,8 +137,8 @@ void Kotlin_CharArray_set(KRef thiz, KInt index, KChar value) {
 
 OBJ_GETTER(Kotlin_CharArray_copyOf, KConstRef thiz, KInt newSize) {
   const ArrayHeader* array = thiz->array();
-  ArrayHeader* result = ArrayContainer(
-      theCharArrayTypeInfo, newSize).GetPlace();
+  ArrayHeader* result = AllocArrayInstance(
+      array->type_info(), newSize, OBJ_RESULT)->array();
   KInt toCopy = array->count_ < newSize ?  array->count_ : newSize;
   memcpy(
       PrimitiveArrayAddressOfElementAt<KChar>(result, 0),
@@ -327,6 +327,36 @@ void Kotlin_BooleanArray_set(KRef thiz, KInt index, KBoolean value) {
 KInt Kotlin_BooleanArray_getArrayLength(KConstRef thiz) {
   const ArrayHeader* array = thiz->array();
   return array->count_;
+}
+
+OBJ_GETTER(Kotlin_ImmutableBinaryBlob_toByteArray, KConstRef thiz, KInt start, KInt count) {
+   const ArrayHeader* array = thiz->array();
+   if (start < 0 || count < 0 || start > array->count_ - count)  {
+        ThrowArrayIndexOutOfBoundsException();
+    }
+    ArrayHeader* result = AllocArrayInstance(
+          theByteArrayTypeInfo, count, OBJ_RESULT)->array();
+    memcpy(PrimitiveArrayAddressOfElementAt<KByte>(result, 0),
+           PrimitiveArrayAddressOfElementAt<KByte>(array, start),
+           count);
+    RETURN_OBJ(result->obj());
+}
+
+KNativePtr Kotlin_ImmutableBinaryBlob_asCPointerImpl(KRef thiz, KInt offset) {
+  ArrayHeader* array = thiz->array();
+  if (offset < 0 || offset > array->count_)  {
+        ThrowArrayIndexOutOfBoundsException();
+  }
+  return PrimitiveArrayAddressOfElementAt<KByte>(array, offset);
+}
+
+KNativePtr Kotlin_Arrays_getAddressOfElement(KRef thiz, KInt index) {
+  ArrayHeader* array = thiz->array();
+  if (index < 0 || index >= array->count_) {
+    ThrowArrayIndexOutOfBoundsException();
+  }
+
+  return AddressOfElementAt(array, index);
 }
 
 }  // extern "C"

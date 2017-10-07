@@ -23,6 +23,8 @@
 
 // Must fit in two bits.
 typedef enum {
+  // Those bit masks are applied to refCount_ field.
+
   // Container is normal thread local container.
   CONTAINER_TAG_NORMAL = 0,
   // Container shall be atomically refcounted, currently disabled.
@@ -32,27 +34,85 @@ typedef enum {
   CONTAINER_TAG_PERMANENT = 2,
   // Stack objects, no need to free, children cleanup still shall be there.
   CONTAINER_TAG_STACK = 3,
-  // Container was seen during GC.
-  CONTAINER_TAG_SEEN = 4,
   // Shift to get actual counter.
-  CONTAINER_TAG_SHIFT = 3,
-  // Actual value to increment/decrement conatiner by. Tag is in lower bits.
+  CONTAINER_TAG_SHIFT = 2,
+  // Actual value to increment/decrement container by. Tag is in lower bits.
   CONTAINER_TAG_INCREMENT = 1 << CONTAINER_TAG_SHIFT,
-  // Mask for container type, disregard seen bit.
-  CONTAINER_TAG_MASK = ((CONTAINER_TAG_INCREMENT >> 1) - 1)
+  // Mask for container type.
+  CONTAINER_TAG_MASK = CONTAINER_TAG_INCREMENT - 1,
+
+  // Those bit masks are applied to objectCount_ field.
+  // Shift to get actual object count.
+  CONTAINER_TAG_GC_SHIFT = 4,
+  CONTAINER_TAG_GC_INCREMENT = 1 << CONTAINER_TAG_GC_SHIFT,
+  // Color of a container.
+  CONTAINER_TAG_GC_COLOR_MASK = ((CONTAINER_TAG_GC_INCREMENT >> 2) - 1),
+  // Colors.
+  CONTAINER_TAG_GC_BLACK  = 0,
+  CONTAINER_TAG_GC_GRAY   = 1,
+  CONTAINER_TAG_GC_WHITE  = 2,
+  CONTAINER_TAG_GC_PURPLE = 3,
+  CONTAINER_TAG_GC_MARKED = 4,
+  CONTAINER_TAG_GC_BUFFERED = 8
 } ContainerTag;
 
 typedef uint32_t container_offset_t;
 typedef uint32_t container_size_t;
 
-
 // Header of all container objects. Contains reference counter.
 struct ContainerHeader {
-  // Reference counter of container. Uses two lower bits of counter for
-  // container type (for polymorphism in ::Release()).
-  volatile uint32_t refCount_;
+  // Reference counter of container. Uses CONTAINER_TAG_SHIFT,lower bits of counter
+  // for container type (for polymorphism in ::Release()).
+  uint32_t refCount_;
   // Number of objects in the container.
   uint32_t objectCount_;
+
+  inline unsigned refCount() const {
+    return refCount_ >> CONTAINER_TAG_SHIFT;
+  }
+  inline void incRefCount() {
+    refCount_ += CONTAINER_TAG_INCREMENT;
+  }
+  inline int decRefCount() {
+    refCount_ -= CONTAINER_TAG_INCREMENT;
+    return refCount_ >> CONTAINER_TAG_SHIFT;
+  }
+  inline unsigned tag() const {
+    return refCount_ & CONTAINER_TAG_MASK;
+  }
+  inline unsigned objectCount() const {
+    return objectCount_ >> CONTAINER_TAG_GC_SHIFT;
+  }
+  inline void incObjectCount() {
+    objectCount_ += CONTAINER_TAG_GC_INCREMENT;
+  }
+  inline void setObjectCount(int count) {
+    objectCount_ = count << CONTAINER_TAG_GC_SHIFT;
+  }
+  inline unsigned color() const {
+    return objectCount_ & CONTAINER_TAG_GC_COLOR_MASK;
+  }
+  inline void setColor(unsigned color) {
+    objectCount_ = (objectCount_ & ~CONTAINER_TAG_GC_COLOR_MASK) | color;
+  }
+  inline bool buffered() const {
+    return (objectCount_ & CONTAINER_TAG_GC_BUFFERED) != 0;
+  }
+  inline void setBuffered() {
+    objectCount_ |= CONTAINER_TAG_GC_BUFFERED;
+  }
+  inline void resetBuffered() {
+    objectCount_ &= ~CONTAINER_TAG_GC_BUFFERED;
+  }
+  inline bool marked() const {
+    return (objectCount_ & CONTAINER_TAG_GC_MARKED) != 0;
+  }
+  inline void mark() {
+    objectCount_ |= CONTAINER_TAG_GC_MARKED;
+  }
+  inline void unMark() {
+    objectCount_ &= ~CONTAINER_TAG_GC_MARKED;
+  }
 };
 
 struct ArrayHeader;
@@ -130,48 +190,6 @@ inline uint32_t ArrayDataSizeBytes(const ArrayHeader* obj) {
   return -obj->type_info()->instanceSize_ * obj->count_;
 }
 
-// TODO: those two operations can be implemented by translator when storing
-// reference to an object.
-inline void AddRef(ContainerHeader* header) {
-  // Looking at container type we may want to skip AddRef() totally
-  // (non-escaping stack objects, constant objects).
-  switch (header->refCount_ & CONTAINER_TAG_MASK) {
-    case CONTAINER_TAG_STACK:
-    case CONTAINER_TAG_PERMANENT:
-      break;
-    case CONTAINER_TAG_NORMAL:
-      header->refCount_ += CONTAINER_TAG_INCREMENT;
-      break;
-    default:
-      RuntimeAssert(false, "unknown container type");
-      break;
-  }
-}
-
-void FreeContainer(ContainerHeader* header);
-
-// Release() returns 'true' iff container cannot be part of cycle (either NOCOUNT
-// object or container was fully released and will be collected).
-inline bool Release(ContainerHeader* header) {
-  switch (header->refCount_ & CONTAINER_TAG_MASK) {
-      case CONTAINER_TAG_PERMANENT:
-      case CONTAINER_TAG_STACK:
-        // permanent/stack containers aren't loop candidates.
-        return true;
-    case CONTAINER_TAG_NORMAL:
-      if ((header->refCount_ -= CONTAINER_TAG_INCREMENT) == CONTAINER_TAG_NORMAL) {
-        FreeContainer(header);
-        return true;
-      }
-      break;
-    default:
-      RuntimeAssert(false, "unknown container type");
-      break;
-  }
-  // Object with non-zero counter after release are loop candidates.
-  return false;
-}
-
 // Class representing arbitrary placement container.
 class Container {
  protected:
@@ -183,20 +201,6 @@ class Container {
         reinterpret_cast<uintptr_t>(obj) - reinterpret_cast<uintptr_t>(header_);
     obj->set_type_info(type_info);
     RuntimeAssert(obj->container() == header_, "Placement must match");
-  }
-
- public:
-  // Increment reference counter associated with container.
-  void AddRef() {
-    if (header_) ::AddRef(header_);
-  }
-
-  // Decrement reference counter associated with container.
-  // For objects whith tricky lifetime (such as ones shared between threads objects)
-  // individual container per object (ObjectContainer) shall be created.
-  // As an alternative, such objects could be evacuated from short-lived containers.
-  void Release() {
-    if (header_) ::Release(header_);
   }
 };
 
@@ -240,6 +244,17 @@ class ArrayContainer : public Container {
 // Container is used for reference counting, and it is assumed that objects
 // with related placement will share container. Only
 // whole container can be freed, individual objects are not taken into account.
+class ArenaContainer;
+
+struct ContainerChunk {
+  ContainerChunk* next;
+  ArenaContainer* arena;
+  // Then we have ContainerHeader here.
+  ContainerHeader* asHeader() {
+    return reinterpret_cast<ContainerHeader*>(this + 1);
+  }
+};
+
 class ArenaContainer {
  public:
   void Init();
@@ -253,26 +268,22 @@ class ArenaContainer {
   // same operation could be used to place strings.
   ArrayHeader* PlaceArray(const TypeInfo* array_type_info, container_size_t count);
 
- private:
-  struct ContainerChunk {
-    ContainerChunk* next;
-    // Then we have ContainerHeader here.
-    ContainerHeader* asHeader() {
-      return reinterpret_cast<ContainerHeader*>(this + 1);
-    }
-  };
+  ObjHeader** getSlot();
 
+ private:
   void* place(container_size_t size);
   bool allocContainer(container_size_t minSize);
-  void setMeta(ObjHeader* obj, const TypeInfo* type_info) {
+  void setMeta(ObjHeader* obj, const TypeInfo* typeInfo) {
     obj->container_offset_negative_ =
         reinterpret_cast<uintptr_t>(obj) - reinterpret_cast<uintptr_t>(currentChunk_->asHeader());
-    obj->set_type_info(type_info);
+    obj->set_type_info(typeInfo);
     RuntimeAssert(obj->container() == currentChunk_->asHeader(), "Placement must match");
   }
   ContainerChunk* currentChunk_;
   uint8_t* current_;
   uint8_t* end_;
+  ArrayHeader* slots_;
+  uint32_t slotsCount_;
 };
 
 #ifdef __cplusplus
@@ -316,6 +327,7 @@ void DeinitMemory(MemoryState*);
 //
 OBJ_GETTER(AllocInstance, const TypeInfo* type_info) RUNTIME_NOTHROW;
 OBJ_GETTER(AllocArrayInstance, const TypeInfo* type_info, uint32_t elements) RUNTIME_NOTHROW;
+void DeinitInstanceBody(const TypeInfo* typeInfo, void* body);
 OBJ_GETTER(InitInstance, ObjHeader** location, const TypeInfo* type_info,
            void (*ctor)(ObjHeader*));
 
@@ -349,10 +361,28 @@ void UpdateRef(ObjHeader** location, const ObjHeader* object) RUNTIME_NOTHROW;
 void UpdateReturnRef(ObjHeader** returnSlot, const ObjHeader* object) RUNTIME_NOTHROW;
 // Optimization: release all references in range.
 void ReleaseRefs(ObjHeader** start, int count) RUNTIME_NOTHROW;
+// Called on frame enter, if it has object slots.
+void EnterFrame(ObjHeader** start, int count) RUNTIME_NOTHROW;
 // Called on frame leave, if it has object slots.
 void LeaveFrame(ObjHeader** start, int count) RUNTIME_NOTHROW;
+// Tries to use returnSlot's arena for allocation.
+ObjHeader** GetReturnSlotIfArena(ObjHeader** returnSlot, ObjHeader** localSlot) RUNTIME_NOTHROW;
+// Tries to use param's arena for allocation.
+ObjHeader** GetParamSlotIfArena(ObjHeader* param, ObjHeader** localSlot) RUNTIME_NOTHROW;
 // Collect garbage, which cannot be found by reference counting (cycles).
 void GarbageCollect() RUNTIME_NOTHROW;
+// Clears object subgraph references from memory subsystem, and optionally
+// checks if subgraph referenced by given root is disjoint from the rest of
+// object graph, i.e. no external references exists.
+bool ClearSubgraphReferences(ObjHeader* root, bool checked) RUNTIME_NOTHROW;
+// Creates stable pointer out of the object.
+void* CreateStablePointer(ObjHeader* obj) RUNTIME_NOTHROW;
+// Disposes stable pointer to the object.
+void DisposeStablePointer(void* pointer) RUNTIME_NOTHROW;;
+// Translate stable pointer to object reference.
+OBJ_GETTER(DerefStablePointer, void*) RUNTIME_NOTHROW;
+// Move stable pointer ownership.
+OBJ_GETTER(AdoptStablePointer, void*) RUNTIME_NOTHROW;
 
 #ifdef __cplusplus
 }

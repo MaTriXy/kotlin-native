@@ -33,9 +33,12 @@ private val dataModel: DataModel = when (System.getProperty("sun.arch.data.model
     else -> throw IllegalStateException()
 }
 
-val pointerSize: Int = dataModel.pointerSize.toInt()
+// Must be only used in interop, contains host pointer size, not target!
+@PublishedApi
+internal val pointerSize: Int = dataModel.pointerSize.toInt()
 
-object nativeMemUtils {
+@PublishedApi
+internal object nativeMemUtils {
     fun getByte(mem: NativePointed) = unsafe.getByte(mem.address)
     fun putByte(mem: NativePointed, value: Byte) = unsafe.putByte(mem.address, value)
 
@@ -76,9 +79,24 @@ object nativeMemUtils {
         unsafe.copyMemory(source, baseOffset, null, dest.address, length.toLong())
     }
 
+    fun getCharArray(source: NativePointed, dest: CharArray, length: Int) {
+        val clazz = CharArray::class.java
+        val baseOffset = unsafe.arrayBaseOffset(clazz).toLong();
+        unsafe.copyMemory(null, source.address, dest, baseOffset, length.toLong() * 2)
+    }
+
+    fun putCharArray(source: CharArray, dest: NativePointed, length: Int) {
+        val clazz = CharArray::class.java
+        val baseOffset = unsafe.arrayBaseOffset(clazz).toLong();
+        unsafe.copyMemory(source, baseOffset, null, dest.address, length.toLong() * 2)
+    }
+
     fun zeroMemory(dest: NativePointed, length: Int): Unit = unsafe.setMemory(dest.address, length.toLong(), 0)
 
-    internal class NativeAllocated(override val rawPtr: NativePtr) : NativePointed
+    @Suppress("NON_PUBLIC_CALL_FROM_PUBLIC_INLINE")
+    inline fun<reified T> allocateInstance(): T {
+        return unsafe.allocateInstance(T::class.java) as T
+    }
 
     fun alloc(size: Long, align: Int): NativePointed {
         val address = unsafe.allocateMemory(
@@ -86,7 +104,7 @@ object nativeMemUtils {
         )
 
         if (address % align != 0L) TODO(align.toString())
-        return interpretPointed<NativeAllocated>(address)
+        return interpretOpaquePointed(address)
     }
 
     fun free(mem: NativePtr) {

@@ -17,14 +17,20 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdint.h>
+
+#ifndef KONAN_NO_FFI
 #include <ffi.h>
+#endif
 
 #include "Memory.h"
 #include "Types.h"
 
+
 namespace {
 
 typedef int FfiTypeKind;
+
+#ifndef KONAN_NO_FFI
 // Also declared in Varargs.kt
 const FfiTypeKind FFI_TYPE_KIND_VOID = 0;
 const FfiTypeKind FFI_TYPE_KIND_SINT8 = 1;
@@ -46,9 +52,10 @@ ffi_type* convertFfiTypeKindToType(FfiTypeKind typeKind) {
         case FFI_TYPE_KIND_DOUBLE: return &ffi_type_double;
         case FFI_TYPE_KIND_POINTER: return &ffi_type_pointer;
 
-        default: assert(false);
+        default: assert(false); return nullptr;
     }
 }
+#endif  // KONAN_NO_FFI
 
 }  // namespace
 
@@ -57,8 +64,9 @@ extern "C" {
 void Kotlin_Interop_callWithVarargs(void* codePtr, void* returnValuePtr, FfiTypeKind returnTypeKind,
                      void** arguments, intptr_t* argumentTypeKinds,
                      int fixedArgumentsNumber, int totalArgumentsNumber) {
-
-
+#ifdef KONAN_NO_FFI
+    RuntimeAssert(false, "Vararg calls are not supported on this platform");
+#else
     ffi_type** argumentTypes = (ffi_type**)argumentTypeKinds;
     // In-place convertion:
     for (int i = 0; i < totalArgumentsNumber; ++i) {
@@ -71,21 +79,19 @@ void Kotlin_Interop_callWithVarargs(void* codePtr, void* returnValuePtr, FfiType
                      convertFfiTypeKindToType(returnTypeKind), argumentTypes);
 
     ffi_call(&cif, (void (*)())codePtr, returnValuePtr, arguments);
+#endif
 }
 
-void* Kotlin_Interop_createStablePointer(KRef any) {
-    ::AddRef(any->container());
-    return reinterpret_cast<void*>(any);
+KNativePtr Kotlin_Interop_createStablePointer(KRef any) {
+    return CreateStablePointer(any);
 }
 
-void Kotlin_Interop_disposeStablePointer(void* pointer) {
-    KRef ref = reinterpret_cast<KRef>(pointer);
-    ::Release(ref->container());
+void Kotlin_Interop_disposeStablePointer(KNativePtr pointer) {
+  DisposeStablePointer(pointer);
 }
 
-OBJ_GETTER(Kotlin_Interop_derefStablePointer, void* pointer) {
-    KRef ref = reinterpret_cast<KRef>(pointer);
-    RETURN_OBJ(ref);
+OBJ_GETTER(Kotlin_Interop_derefStablePointer, KNativePtr pointer) {
+  RETURN_RESULT_OF(DerefStablePointer, pointer);
 }
 
 }

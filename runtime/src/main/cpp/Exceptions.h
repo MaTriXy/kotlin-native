@@ -29,6 +29,8 @@ OBJ_GETTER0(GetCurrentStackTrace);
 // Throws arbitrary exception.
 void ThrowException(KRef exception);
 
+void SetKonanTerminateHandler();
+
 // The functions below are implemented in Kotlin (at package konan.internal).
 
 // Throws null pointer exception. Context is evaluated from caller's address.
@@ -42,6 +44,10 @@ void ThrowClassCastException();
 void ThrowArithmeticException();
 // Throws number format exception.
 void ThrowNumberFormatException();
+// Throws out of memory error.
+void ThrowOutOfMemoryError();
+// Prints out mesage of Throwable.
+void PrintThrowable(KRef);
 
 #ifdef __cplusplus
 } // extern "C"

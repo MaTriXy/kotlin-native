@@ -1,110 +1,7 @@
 #include <stdint.h>
 #include <jni.h>
 #include <clang-c/Index.h>
-
-JNIEXPORT jlong JNICALL Java_clang_clang_kni_1asctime (JNIEnv *jniEnv, jclass jclss, jlong arg0) {
-    return (jlong) (asctime((struct tm*)arg0));
-}
-
-JNIEXPORT jlong JNICALL Java_clang_clang_kni_1clock (JNIEnv *jniEnv, jclass jclss) {
-    return (jlong) (clock());
-}
-
-JNIEXPORT jlong JNICALL Java_clang_clang_kni_1ctime (JNIEnv *jniEnv, jclass jclss, jlong arg0) {
-    return (jlong) (ctime((time_t*)arg0));
-}
-
-JNIEXPORT jdouble JNICALL Java_clang_clang_kni_1difftime (JNIEnv *jniEnv, jclass jclss, jlong arg0, jlong arg1) {
-    return (jdouble) (difftime((time_t)arg0, (time_t)arg1));
-}
-
-JNIEXPORT jlong JNICALL Java_clang_clang_kni_1getdate (JNIEnv *jniEnv, jclass jclss, jlong arg0) {
-    return (jlong) (getdate((char*)arg0));
-}
-
-JNIEXPORT jlong JNICALL Java_clang_clang_kni_1gmtime (JNIEnv *jniEnv, jclass jclss, jlong arg0) {
-    return (jlong) (gmtime((time_t*)arg0));
-}
-
-JNIEXPORT jlong JNICALL Java_clang_clang_kni_1localtime (JNIEnv *jniEnv, jclass jclss, jlong arg0) {
-    return (jlong) (localtime((time_t*)arg0));
-}
-
-JNIEXPORT jlong JNICALL Java_clang_clang_kni_1mktime (JNIEnv *jniEnv, jclass jclss, jlong arg0) {
-    return (jlong) (mktime((struct tm*)arg0));
-}
-
-JNIEXPORT jlong JNICALL Java_clang_clang_kni_1strftime (JNIEnv *jniEnv, jclass jclss, jlong arg0, jlong arg1, jlong arg2, jlong arg3) {
-    return (jlong) (strftime((char*)arg0, (size_t)arg1, (char*)arg2, (struct tm*)arg3));
-}
-
-JNIEXPORT jlong JNICALL Java_clang_clang_kni_1strptime (JNIEnv *jniEnv, jclass jclss, jlong arg0, jlong arg1, jlong arg2) {
-    return (jlong) (strptime((char*)arg0, (char*)arg1, (struct tm*)arg2));
-}
-
-JNIEXPORT jlong JNICALL Java_clang_clang_kni_1time (JNIEnv *jniEnv, jclass jclss, jlong arg0) {
-    return (jlong) (time((time_t*)arg0));
-}
-
-JNIEXPORT void JNICALL Java_clang_clang_kni_1tzset (JNIEnv *jniEnv, jclass jclss) {
-    tzset();
-}
-
-JNIEXPORT jlong JNICALL Java_clang_clang_kni_1asctime_1r (JNIEnv *jniEnv, jclass jclss, jlong arg0, jlong arg1) {
-    return (jlong) (asctime_r((struct tm*)arg0, (char*)arg1));
-}
-
-JNIEXPORT jlong JNICALL Java_clang_clang_kni_1ctime_1r (JNIEnv *jniEnv, jclass jclss, jlong arg0, jlong arg1) {
-    return (jlong) (ctime_r((time_t*)arg0, (char*)arg1));
-}
-
-JNIEXPORT jlong JNICALL Java_clang_clang_kni_1gmtime_1r (JNIEnv *jniEnv, jclass jclss, jlong arg0, jlong arg1) {
-    return (jlong) (gmtime_r((time_t*)arg0, (struct tm*)arg1));
-}
-
-JNIEXPORT jlong JNICALL Java_clang_clang_kni_1localtime_1r (JNIEnv *jniEnv, jclass jclss, jlong arg0, jlong arg1) {
-    return (jlong) (localtime_r((time_t*)arg0, (struct tm*)arg1));
-}
-
-JNIEXPORT jlong JNICALL Java_clang_clang_kni_1posix2time (JNIEnv *jniEnv, jclass jclss, jlong arg0) {
-    return (jlong) (posix2time((time_t)arg0));
-}
-
-JNIEXPORT void JNICALL Java_clang_clang_kni_1tzsetwall (JNIEnv *jniEnv, jclass jclss) {
-    tzsetwall();
-}
-
-JNIEXPORT jlong JNICALL Java_clang_clang_kni_1time2posix (JNIEnv *jniEnv, jclass jclss, jlong arg0) {
-    return (jlong) (time2posix((time_t)arg0));
-}
-
-JNIEXPORT jlong JNICALL Java_clang_clang_kni_1timelocal (JNIEnv *jniEnv, jclass jclss, jlong arg0) {
-    return (jlong) (timelocal((struct tm*)arg0));
-}
-
-JNIEXPORT jlong JNICALL Java_clang_clang_kni_1timegm (JNIEnv *jniEnv, jclass jclss, jlong arg0) {
-    return (jlong) (timegm((struct tm*)arg0));
-}
-
-JNIEXPORT jint JNICALL Java_clang_clang_kni_1nanosleep (JNIEnv *jniEnv, jclass jclss, jlong __rqtp, jlong __rmtp) {
-    return (jint) (nanosleep((struct timespec*)__rqtp, (struct timespec*)__rmtp));
-}
-
-JNIEXPORT jint JNICALL Java_clang_clang_kni_1clock_1getres (JNIEnv *jniEnv, jclass jclss, jint __clock_id, jlong __res) {
-    return (jint) (clock_getres((clockid_t)__clock_id, (struct timespec*)__res));
-}
-
-JNIEXPORT jint JNICALL Java_clang_clang_kni_1clock_1gettime (JNIEnv *jniEnv, jclass jclss, jint __clock_id, jlong __tp) {
-    return (jint) (clock_gettime((clockid_t)__clock_id, (struct timespec*)__tp));
-}
-
-JNIEXPORT jlong JNICALL Java_clang_clang_kni_1clock_1gettime_1nsec_1np (JNIEnv *jniEnv, jclass jclss, jint __clock_id) {
-    return (jlong) (clock_gettime_nsec_np((clockid_t)__clock_id));
-}
-
-JNIEXPORT jint JNICALL Java_clang_clang_kni_1clock_1settime (JNIEnv *jniEnv, jclass jclss, jint __clock_id, jlong __tp) {
-    return (jint) (clock_settime((clockid_t)__clock_id, (struct timespec*)__tp));
-}
+#include <clang-c/ext.h>
 
 JNIEXPORT jlong JNICALL Java_clang_clang_kni_1clang_1getCString (JNIEnv *jniEnv, jclass jclss, jlong string) {
     return (jlong) (clang_getCString(*(CXString*)string));
@@ -1341,5 +1238,41 @@ JNIEXPORT jlong JNICALL Java_clang_clang_kni_1clang_1indexLoc_1getCXSourceLocati
 
 JNIEXPORT jint JNICALL Java_clang_clang_kni_1clang_1Type_1visitFields (JNIEnv *jniEnv, jclass jclss, jlong T, jlong visitor, jlong client_data) {
     return (jint) (clang_Type_visitFields(*(CXType*)T, (CXFieldVisitor)visitor, (CXClientData)client_data));
+}
+
+JNIEXPORT jlong JNICALL Java_clang_clang_kni_1clang_1Cursor_1getAttributeSpelling (JNIEnv *jniEnv, jclass jclss, jlong cursor) {
+    return (jlong) (clang_Cursor_getAttributeSpelling(*(CXCursor*)cursor));
+}
+
+JNIEXPORT jlong JNICALL Java_clang_clang_kni_1clang_1getDeclTypeAttributes (JNIEnv *jniEnv, jclass jclss, jlong cursor, jlong retValPlacement) {
+    *(CXTypeAttributes*)retValPlacement = clang_getDeclTypeAttributes(*(CXCursor*)cursor);
+    return (jlong) retValPlacement;
+}
+
+JNIEXPORT jlong JNICALL Java_clang_clang_kni_1clang_1getResultTypeAttributes (JNIEnv *jniEnv, jclass jclss, jlong typeAttributes, jlong retValPlacement) {
+    *(CXTypeAttributes*)retValPlacement = clang_getResultTypeAttributes(*(CXTypeAttributes*)typeAttributes);
+    return (jlong) retValPlacement;
+}
+
+JNIEXPORT jlong JNICALL Java_clang_clang_kni_1clang_1getCursorResultTypeAttributes (JNIEnv *jniEnv, jclass jclss, jlong cursor, jlong retValPlacement) {
+    *(CXTypeAttributes*)retValPlacement = clang_getCursorResultTypeAttributes(*(CXCursor*)cursor);
+    return (jlong) retValPlacement;
+}
+
+JNIEXPORT jint JNICALL Java_clang_clang_kni_1clang_1Type_1getNullabilityKind (JNIEnv *jniEnv, jclass jclss, jlong type, jlong attributes) {
+    return (jint) (clang_Type_getNullabilityKind(*(CXType*)type, *(CXTypeAttributes*)attributes));
+}
+
+JNIEXPORT jint JNICALL Java_clang_clang_kni_1clang_1Type_1getNumProtocols (JNIEnv *jniEnv, jclass jclss, jlong type) {
+    return (jint) (clang_Type_getNumProtocols(*(CXType*)type));
+}
+
+JNIEXPORT jlong JNICALL Java_clang_clang_kni_1clang_1Type_1getProtocol (JNIEnv *jniEnv, jclass jclss, jlong type, jint index, jlong retValPlacement) {
+    *(CXCursor*)retValPlacement = clang_Type_getProtocol(*(CXType*)type, (unsigned int)index);
+    return (jlong) retValPlacement;
+}
+
+JNIEXPORT jint JNICALL Java_clang_clang_kni_1clang_1Cursor_1isObjCInitMethod (JNIEnv *jniEnv, jclass jclss, jlong cursor) {
+    return (jint) (clang_Cursor_isObjCInitMethod(*(CXCursor*)cursor));
 }
 

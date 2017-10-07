@@ -16,7 +16,7 @@ const val FFI_TYPE_KIND_POINTER: FfiTypeKind = 7
 
 private tailrec fun convertArgument(
         argument: Any?, isVariadic: Boolean, location: COpaquePointer,
-        additionalPlacement: NativePlacement
+        additionalPlacement: AutofreeScope
 ): FfiTypeKind = when (argument) {
     is CValuesRef<*>? -> {
         location.reinterpret<CPointerVar<*>>()[0] = argument?.getPointer(additionalPlacement)
@@ -37,6 +37,8 @@ private tailrec fun convertArgument(
         location.reinterpret<LongVar>()[0] = argument
         FFI_TYPE_KIND_SINT64
     }
+
+    is Boolean -> convertArgument(argument.toByte(), isVariadic, location, additionalPlacement)
 
     is Byte -> if (isVariadic) {
         convertArgument(argument.toInt(), isVariadic, location, additionalPlacement)
@@ -66,6 +68,11 @@ private tailrec fun convertArgument(
 
     is CEnum -> convertArgument(argument.value, isVariadic, location, additionalPlacement)
 
+    is ObjCPointerHolder -> {
+        location.reinterpret<COpaquePointerVar>()[0] = interpretCPointer(argument.rawPtr)
+        FFI_TYPE_KIND_POINTER
+    }
+
     else -> throw Error("unsupported argument: $argument")
 }
 
@@ -89,7 +96,7 @@ inline fun <reified T  : CVariable> NativePlacement.allocFfiReturnValueBuffer(ty
 
 fun callWithVarargs(codePtr: NativePtr, returnValuePtr: NativePtr, returnTypeKind: FfiTypeKind,
                     fixedArguments: Array<out Any?>, variadicArguments: Array<out Any?>,
-                    argumentsPlacement: NativePlacement) {
+                    argumentsPlacement: AutofreeScope) {
 
     val totalArgumentsNumber = fixedArguments.size + variadicArguments.size
 

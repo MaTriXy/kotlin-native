@@ -23,11 +23,11 @@ import java.io.File
 /**
  * Finds all "macro constants" and registers them as [NativeIndex.constants] in given index.
  */
-internal fun findMacroConstants(library: NativeLibrary, nativeIndex: NativeIndexImpl) {
-    val names = collectMacroConstantsNames(library)
+internal fun findMacroConstants(nativeIndex: NativeIndexImpl) {
+    val names = collectMacroConstantsNames(nativeIndex)
     // TODO: apply user-defined filters.
 
-    val constants = expandMacroConstants(library, names, typeConverter = nativeIndex::convertType)
+    val constants = expandMacroConstants(nativeIndex.library, names, typeConverter = { nativeIndex.convertType(it) })
 
     nativeIndex.macroConstants.addAll(constants)
 }
@@ -109,7 +109,7 @@ private fun reparseWithCodeSnippet(library: NativeLibrary,
         // so the code pattern should force the constant evaluation that corresponds to language rules.
         val codeSnippetLines = when (library.language) {
             // Note: __auto_type is a GNU extension which is supported by clang.
-            Language.C -> listOf(
+            Language.C, Language.OBJECTIVE_C -> listOf(
                     "const __auto_type KNI_INDEXER_VARIABLE = $name;",
                     // Clang evaluate API doesn't provide a way to get a `long long` value yet;
                     // so extract such values from the enum declaration:
@@ -142,9 +142,10 @@ private fun processCodeSnippet(
         val kind = cursor.kind
         when {
             state == VisitorState.EXPECT_VARIABLE && kind == CXCursorKind.CXCursor_VarDecl -> {
-                state = VisitorState.EXPECT_VARIABLE_VALUE
+
                 val evalResult = clang_Cursor_Evaluate(cursor)
                 if (evalResult != null) {
+                    state = VisitorState.EXPECT_VARIABLE_VALUE
                     try {
                         evalResultKind = clang_EvalResult_getKind(evalResult)
                         if (evalResultKind == CXEvalResultKind.CXEval_Float) {
@@ -153,6 +154,8 @@ private fun processCodeSnippet(
                     } finally {
                         clang_EvalResult_dispose(evalResult)
                     }
+                } else {
+                    state = VisitorState.INVALID
                 }
                 CXChildVisitResult.CXChildVisit_Recurse
             }
@@ -206,17 +209,17 @@ enum class VisitorState {
     EXPECT_END, INVALID
 }
 
-private fun collectMacroConstantsNames(library: NativeLibrary): List<String> {
+private fun collectMacroConstantsNames(nativeIndex: NativeIndexImpl): List<String> {
     val result = mutableSetOf<String>()
     val index = clang_createIndex(excludeDeclarationsFromPCH = 0, displayDiagnostics = 0)!!
     try {
         // Include macros into AST:
         val options = CXTranslationUnit_DetailedPreprocessingRecord
 
-        val translationUnit = library.parse(index, options)
+        val translationUnit = nativeIndex.library.parse(index, options)
         try {
             translationUnit.ensureNoCompileErrors()
-            val headers = getFilteredHeaders(library, index, translationUnit)
+            val headers = getFilteredHeaders(nativeIndex, index, translationUnit)
 
             visitChildren(translationUnit) { cursor, _ ->
                 val file = memScoped {
@@ -226,7 +229,8 @@ private fun collectMacroConstantsNames(library: NativeLibrary): List<String> {
                 }
 
                 if (cursor.kind == CXCursorKind.CXCursor_MacroDefinition &&
-                        library.includesDeclaration(cursor) &&
+                        nativeIndex.library.includesDeclaration(cursor) &&
+                        file != null && // Builtin macros mostly seem to be useless.
                         file in headers &&
                         canMacroBeConstant(cursor))
                 {

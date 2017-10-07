@@ -42,8 +42,9 @@ private fun StaticData.arrayHeader(typeInfo: ConstPointer, length: Int): Struct 
     return Struct(runtime.arrayHeaderType, typeInfo, Int32(containerOffsetNegative), Int32(length))
 }
 
-internal fun StaticData.createKotlinStringLiteral(type: KotlinType, irConst: IrConst<String>): ConstPointer {
-    val value = irConst.value
+internal fun StaticData.createKotlinStringLiteral(value: String): ConstPointer {
+    val type = context.builtIns.stringType
+
     val name = "kstr:" + value.globalHashBase64
     val elements = value.toCharArray().map(::Char16)
 
@@ -68,7 +69,6 @@ internal fun StaticData.createKotlinArray(arrayType: KotlinType, elements: List<
         createKotlinArray(arrayType, elements.map { constValue(it) }).llvm
 
 internal fun StaticData.createKotlinArray(arrayType: KotlinType, elements: List<ConstValue>): ConstPointer {
-
     val typeInfo = arrayType.typeInfoPtr!!
 
     val bodyElementType: LLVMTypeRef = elements.firstOrNull()?.llvmType ?: int8Type
@@ -142,6 +142,7 @@ internal fun StaticData.createArrayList(elementType: TypeProjection, array: Cons
 
     return createKotlinObject(type, body)
 }
+
 
 internal fun StaticData.createUnitInstance(descriptor: ClassDescriptor,
                                            bodyType: LLVMTypeRef,

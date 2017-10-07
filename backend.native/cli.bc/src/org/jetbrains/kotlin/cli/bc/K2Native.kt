@@ -17,45 +17,33 @@
 package org.jetbrains.kotlin.cli.bc
 
 import com.intellij.openapi.Disposable
+import org.jetbrains.annotations.NotNull
+import org.jetbrains.annotations.Nullable
 import org.jetbrains.kotlin.backend.konan.*
 import org.jetbrains.kotlin.backend.konan.util.profile
 import org.jetbrains.kotlin.cli.common.CLICompiler
+import org.jetbrains.kotlin.cli.common.CLITool
 import org.jetbrains.kotlin.cli.common.ExitCode
+import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity.ERROR
+import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity.WARNING
 import org.jetbrains.kotlin.cli.jvm.compiler.EnvironmentConfigFiles
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment
-import org.jetbrains.kotlin.config.CommonConfigurationKeys
 import org.jetbrains.kotlin.config.CompilerConfiguration
 import org.jetbrains.kotlin.config.Services
 import org.jetbrains.kotlin.config.addKotlinSourceRoots
-import java.util.*
+import org.jetbrains.kotlin.config.kotlinSourceRoots
+import org.jetbrains.kotlin.konan.target.CompilerOutputKind
+import org.jetbrains.kotlin.konan.target.TargetManager
+import org.jetbrains.kotlin.utils.KotlinPaths
 import kotlin.reflect.KFunction
 
-// TODO: Don't use reflection?
-private fun maybeExecuteHelper(configuration: CompilerConfiguration) {
-    try {
-        val kClass = Class.forName("org.jetbrains.kotlin.konan.Helper0").kotlin
-        val ctor = kClass.constructors.single() as KFunction<Runnable>
-        val distribution = Distribution(configuration)
-        val result = ctor.call(
-                distribution.dependenciesDir,
-                distribution.properties.properties,
-                distribution.dependencies
-        )
-        result.run()
-    } catch (notFound: ClassNotFoundException) {
-        // Just ignore, no helper.
-    } catch (e: Throwable) {
-        throw IllegalStateException("Cannot download dependencies.", e)
-    }
-}
+class K2Native : CLICompiler<K2NativeCompilerArguments>() {
 
-class K2Native : CLICompiler<K2NativeCompilerArguments>() { 
+    override fun doExecute(@NotNull arguments: K2NativeCompilerArguments, @NotNull configuration: CompilerConfiguration, @NotNull rootDisposable: Disposable, @Nullable paths: KotlinPaths?): ExitCode {
 
-
-    override fun doExecute(arguments : K2NativeCompilerArguments,
-                           configuration : CompilerConfiguration,
-                           rootDisposable: Disposable
-                          ): ExitCode {
+        if (arguments.freeArgs.isEmpty() && !arguments.isUsefulWithoutFreeArgs) {
+            configuration.report(ERROR, "You have not specified any compilation arguments. No output has been produced.")
+        }
 
         val environment = KotlinCoreEnvironment.createForProduction(rootDisposable,
             configuration, EnvironmentConfigFiles.NATIVE_CONFIG_FILES)
@@ -67,15 +55,17 @@ class K2Native : CLICompiler<K2NativeCompilerArguments>() {
         } catch (e: KonanCompilationException) {
             return ExitCode.COMPILATION_ERROR
         }
-        // TODO: catch Errors and IllegalStateException.
 
+        // TODO: catch Errors and IllegalStateException.
         return ExitCode.OK
     }
+
+    val K2NativeCompilerArguments.isUsefulWithoutFreeArgs: Boolean
+        get() = this.listTargets || this.listPhases || this.checkDependencies
 
     fun Array<String>?.toNonNullList(): List<String> {
         return this?.asList<String>() ?: listOf<String>()
     }
-
 
     // It is executed before doExecute().
     override fun setupPlatformSpecificArgumentsAndServices(
@@ -88,40 +78,38 @@ class K2Native : CLICompiler<K2NativeCompilerArguments>() {
         with(KonanConfigKeys) {
             with(configuration) {
 
+                put(NODEFAULTLIBS, arguments.nodefaultlibs)
                 put(NOSTDLIB, arguments.nostdlib)
-                put(NOLINK, arguments.nolink)
                 put(NOPACK, arguments.nopack)
                 put(NOMAIN, arguments.nomain)
                 put(LIBRARY_FILES,
                         arguments.libraries.toNonNullList())
 
                 put(LINKER_ARGS, arguments.linkerArguments.toNonNullList())
-                if (arguments.target != null)
-                    put(TARGET, arguments.target)
+                arguments.moduleName ?. let{ put(MODULE_NAME, it) }
+                arguments.target ?.let{ put(TARGET, it) }
 
+                put(INCLUDED_BINARY_FILES,
+                        arguments.includeBinaries.toNonNullList())
                 put(NATIVE_LIBRARY_FILES,
                         arguments.nativeLibraries.toNonNullList())
+                put(REPOSITORIES,
+                        arguments.repositories.toNonNullList())
 
                 // TODO: Collect all the explicit file names into an object
                 // and teach the compiler to work with temporaries and -save-temps.
-                val library = arguments.outputFile ?: "library"
-                if (arguments.nolink) 
-                    put(LIBRARY_NAME, library)
-                    put(LIBRARY_FILE, "${library}.klib")
-                val program = arguments.outputFile ?: "program"
-                if (!arguments.nolink) {
-                    put(PROGRAM_NAME,program)
-                    put(EXECUTABLE_FILE,"${program}.kexe")
-                }
-                // This is a decision we could change
-                val module = if (arguments.nolink) library else program
-                put(CommonConfigurationKeys.MODULE_NAME, module)
+
+                arguments.outputName ?.let { put(OUTPUT, it) } 
+                val outputKind = CompilerOutputKind.valueOf(
+                    (arguments.produce ?: "program").toUpperCase())
+                put(PRODUCE, outputKind)
                 put(ABI_VERSION, 1)
 
-                if (arguments.runtimeFile != null)
-                    put(RUNTIME_FILE, arguments.runtimeFile)
-                if (arguments.propertyFile != null)
-                    put(PROPERTY_FILE, arguments.propertyFile)
+                arguments.mainPackage ?.let{ put(ENTRY, it) }
+                arguments.manifestFile ?.let{ put(MANIFEST_FILE, it) }
+                arguments.runtimeFile ?.let{ put(RUNTIME_FILE, it) }
+                arguments.propertyFile ?.let{ put(PROPERTY_FILE, it) }
+
                 put(LIST_TARGETS, arguments.listTargets)
                 put(OPTIMIZATION, arguments.optimization)
                 put(DEBUG, arguments.debug)
@@ -146,10 +134,17 @@ class K2Native : CLICompiler<K2NativeCompilerArguments>() {
                 put(TIME_PHASES, arguments.timePhases)
 
                 put(ENABLE_ASSERTIONS, arguments.enableAssertions)
+
+                put(GENERATE_TEST_RUNNER, arguments.generateTestRunner)
+
+                // We need to download dependencies only if we use them ( = there are files to compile).
+                put(CHECK_DEPENDENCIES, if (configuration.kotlinSourceRoots.isNotEmpty()) {
+                        true
+                    } else {
+                        arguments.checkDependencies
+                    })
             }
         }
-
-        maybeExecuteHelper(configuration)
     }
 
     override fun createArguments(): K2NativeCompilerArguments {
@@ -161,7 +156,7 @@ class K2Native : CLICompiler<K2NativeCompilerArguments>() {
     companion object {
         @JvmStatic fun main(args: Array<String>) {
             profile("Total compiler main()") {
-                CLICompiler.doMain(K2Native(), args)
+                CLITool.doMain(K2Native(), args)
             }
         }
     }

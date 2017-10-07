@@ -16,16 +16,22 @@
 
 package org.jetbrains.kotlin.backend.konan
 
-import org.jetbrains.kotlin.config.CompilerConfiguration
-import java.io.File
+import org.jetbrains.kotlin.konan.target.*
+import org.jetbrains.kotlin.konan.file.*
+import org.jetbrains.kotlin.konan.properties.*
 
-class Distribution(val config: CompilerConfiguration) {
+class Distribution(val targetManager: TargetManager,
+    val propertyFileOverride: String? = null,
+    val runtimeFileOverride: String? = null) {
 
-    val targetManager = TargetManager(config)
-    val target = targetManager.currentName
-    val suffix = targetManager.currentSuffix()
-    val hostSuffix = TargetManager.host.suffix
-    init { if (!targetManager.crossCompile) assert(suffix == hostSuffix) }
+    val target = targetManager.target
+    val targetName = targetManager.targetName
+    val host = TargetManager.host
+    val hostSuffix = TargetManager.hostSuffix
+    val hostTargetSuffix = targetManager.hostTargetSuffix
+    val targetSuffix = targetManager.targetSuffix
+
+    val localKonanDir = "${File.userHome}/.konan"
 
     private fun findKonanHome(): String {
         val value = System.getProperty("konan.home", "dist")
@@ -34,42 +40,33 @@ class Distribution(val config: CompilerConfiguration) {
     }
 
     val konanHome = findKonanHome()
-    val propertyFile = config.get(KonanConfigKeys.PROPERTY_FILE) 
-        ?: "$konanHome/konan/konan.properties"
-    val properties = KonanProperties(propertyFile)
+    val propertyFileName = propertyFileOverride ?: "$konanHome/konan/konan.properties"
+    val properties = File(propertyFileName).loadProperties()
 
     val klib = "$konanHome/klib"
+    val stdlib = "$klib/stdlib"
+    val runtime = runtimeFileOverride ?: "$stdlib/targets/${targetName}/native/runtime.bc"
 
     val dependenciesDir = "$konanHome/dependencies"
-    val dependencies = properties.propertyList("dependencies.$suffix")
 
-    val stdlib = "$klib/stdlib"
-    val runtime = config.get(KonanConfigKeys.RUNTIME_FILE) 
-        ?: "$stdlib/$target/native/runtime.bc"
+    val targetProperties = KonanProperties(target, properties, dependenciesDir)
+    val hostProperties = if (target == host) {
+        targetProperties 
+    } else {
+        KonanProperties(host, properties, dependenciesDir)
+    }
+    val dependencies = targetProperties.dependencies
 
-    val llvmHome = "$dependenciesDir/${properties.propertyString("llvmHome.$hostSuffix")}"
-    val sysRoot = "$dependenciesDir/${properties.propertyString("sysRoot.$hostSuffix")}"
-
-    val libGcc = "$dependenciesDir/${properties.propertyString("libGcc.$suffix")}"
-    val targetSysRoot = if (properties.hasProperty("targetSysRoot.$suffix")) {
-            "$dependenciesDir/${properties.propertyString("targetSysRoot.$suffix")}"
-        } else {
-            sysRoot
-        }
-
-    val libffi = "$dependenciesDir/${properties.propertyString("libffiDir.$suffix")}/lib/libffi.a"
-
+    val llvmHome = hostProperties.absoluteLlvmHome
+    val hostSysRoot = hostProperties.absoluteTargetSysRoot
     val llvmBin = "$llvmHome/bin"
     val llvmLib = "$llvmHome/lib"
-
-    val llvmOpt = "$llvmBin/opt"
-    val llvmLlc = "$llvmBin/llc"
     val llvmLto = "$llvmBin/llvm-lto"
-    val llvmLink = "$llvmBin/llvm-link"
-    val libCppAbi = "$llvmLib/libc++abi.a"
-    val libLTO = when (TargetManager.host) {
-        KonanTarget.MACBOOK -> "$llvmLib/libLTO.dylib" 
-        KonanTarget.LINUX -> "$llvmLib/libLTO.so" 
+
+    private val libLTODir = when (TargetManager.host) {
+        KonanTarget.MACBOOK, KonanTarget.LINUX -> llvmLib
+        KonanTarget.MINGW -> llvmBin
         else -> error("Don't know libLTO location for this platform.")
     }
+    val libLTO = "$libLTODir/${System.mapLibraryName("LTO")}"
 }

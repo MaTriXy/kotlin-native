@@ -21,6 +21,8 @@ import kotlinx.cinterop.*
 import java.io.Closeable
 import java.io.File
 import java.nio.file.Paths
+import java.security.DigestInputStream
+import java.security.MessageDigest
 
 internal val CValue<CXType>.kind: CXTypeKind get() = this.useContents { kind }
 
@@ -69,6 +71,8 @@ internal fun convertUnqualifiedPrimitiveType(type: CValue<CXType>): Type = when 
             size = type.getSize().toInt(),
             spelling = clang_getTypeSpelling(type).convertAndDispose()
     )
+
+    CXTypeKind.CXType_Bool -> BoolType
 
     else -> UnsupportedType
 }
@@ -134,17 +138,40 @@ internal fun CXTranslationUnit.ensureNoCompileErrors(): CXTranslationUnit {
 internal typealias CursorVisitor = (cursor: CValue<CXCursor>, parent: CValue<CXCursor>) -> CXChildVisitResult
 
 internal fun visitChildren(parent: CValue<CXCursor>, visitor: CursorVisitor) {
-    val visitorPtr = StableObjPtr.create(visitor)
-    val clientData = visitorPtr.value
-    clang_visitChildren(parent, staticCFunction { cursor, parent, clientData ->
-        @Suppress("NAME_SHADOWING", "UNCHECKED_CAST")
-        val visitor = StableObjPtr.fromValue(clientData!!).get() as CursorVisitor
-        visitor(cursor, parent)
-    }, clientData)
+    val visitorStableRef = StableObjPtr.create(visitor)
+    try {
+        val clientData = visitorStableRef.asCPointer()
+        clang_visitChildren(parent, staticCFunction { cursorIt, parentIt, clientDataIt ->
+            val visitorIt = clientDataIt!!.asStableRef<CursorVisitor>().get()
+            visitorIt(cursorIt, parentIt)
+        }, clientData)
+    } finally {
+        visitorStableRef.dispose()
+    }
 }
 
 internal fun visitChildren(translationUnit: CXTranslationUnit, visitor: CursorVisitor) =
         visitChildren(clang_getTranslationUnitCursor(translationUnit), visitor)
+
+internal fun getFields(type: CValue<CXType>): List<CValue<CXCursor>> {
+    val result = mutableListOf<CValue<CXCursor>>()
+    val resultStableRef = StableRef.create(result)
+    try {
+        val clientData = resultStableRef.asCPointer()
+
+        @Suppress("NAME_SHADOWING")
+        clang_Type_visitFields(type, staticCFunction { cursor, clientData ->
+            val result = clientData!!.asStableRef<MutableList<CValue<CXCursor>>>().get()
+            result.add(cursor)
+            CXVisitorResult.CXVisit_Continue
+        }, clientData)
+
+    } finally {
+        resultStableRef.dispose()
+    }
+
+    return result
+}
 
 internal fun CValue<CXCursor>.isLeaf(): Boolean {
     var hasChildren = false
@@ -157,9 +184,9 @@ internal fun CValue<CXCursor>.isLeaf(): Boolean {
     return !hasChildren
 }
 
-internal fun List<String>.toNativeStringArray(placement: NativePlacement): CArrayPointer<CPointerVar<ByteVar>> {
-    return placement.allocArray(this.size) { index ->
-        this.value = this@toNativeStringArray[index].cstr.getPointer(placement)
+internal fun List<String>.toNativeStringArray(scope: AutofreeScope): CArrayPointer<CPointerVar<ByteVar>> {
+    return scope.allocArray(this.size) { index ->
+        this.value = this@toNativeStringArray[index].cstr.getPointer(scope)
     }
 }
 
@@ -176,10 +203,7 @@ internal fun Appendable.appendPreamble(library: NativeLibrary) = this.apply {
  * Creates temporary source file which includes the library.
  */
 internal fun NativeLibrary.createTempSource(): File {
-    val suffix = when (language) {
-        Language.C -> ".c"
-    }
-    val result = createTempFile(suffix = suffix)
+    val result = createTempFile(suffix = ".${language.sourceFileExtension}")
     result.deleteOnExit()
 
     result.bufferedWriter().use { writer ->
@@ -315,30 +339,34 @@ internal interface Indexer {
 }
 
 internal fun indexTranslationUnit(index: CXIndex, translationUnit: CXTranslationUnit, options: Int, indexer: Indexer) {
-    val indexerStablePtr = StableObjPtr.create(indexer)
+    val indexerStableRef = StableObjPtr.create(indexer)
     try {
-        val clientData = indexerStablePtr.value
+        val clientData = indexerStableRef.asCPointer()
         memScoped {
             val indexerCallbacks = alloc<IndexerCallbacks>().apply {
                 abortQuery = null
                 diagnostic = null
-                enteredMainFile = staticCFunction { clientData, mainFile, reserved ->
+                enteredMainFile = staticCFunction { clientData, mainFile, _ ->
                     @Suppress("NAME_SHADOWING")
-                    val indexer = StableObjPtr.fromValue(clientData!!).get() as Indexer
+                    val indexer = clientData!!.asStableRef<Indexer>().get()
                     indexer.enteredMainFile(mainFile!!)
+                    // We must ensure only interop types exist in function signature.
+                    @Suppress("USELESS_CAST")
                     null as CXIdxClientFile?
                 }
                 ppIncludedFile = staticCFunction { clientData, info ->
                     @Suppress("NAME_SHADOWING")
-                    val indexer = StableObjPtr.fromValue(clientData!!).get() as Indexer
+                    val indexer = clientData!!.asStableRef<Indexer>().get()
                     indexer.ppIncludedFile(info!!.pointed)
+                    // We must ensure only interop types exist in function signature.
+                    @Suppress("USELESS_CAST")
                     null as CXIdxClientFile?
                 }
                 importedASTFile = null
                 startedTranslationUnit = null
                 indexDeclaration = staticCFunction { clientData, info ->
                     @Suppress("NAME_SHADOWING")
-                    val nativeIndex = StableObjPtr.fromValue(clientData!!).get() as Indexer
+                    val nativeIndex = clientData!!.asStableRef<Indexer>().get()
                     nativeIndex.indexDeclaration(info!!.pointed)
                 }
                 indexEntityReference = null
@@ -357,7 +385,7 @@ internal fun indexTranslationUnit(index: CXIndex, translationUnit: CXTranslation
             }
         }
     } finally {
-        indexerStablePtr.dispose()
+        indexerStableRef.dispose()
     }
 }
 
@@ -410,8 +438,16 @@ internal class ModulesMap(
     }
 }
 
-internal fun getFilteredHeaders(library: NativeLibrary, index: CXIndex, translationUnit: CXTranslationUnit): Set<CXFile> {
-    val result = mutableSetOf<CXFile>()
+fun HeaderInclusionPolicy.includeAll(headerName: String?, headerId: HeaderId): Boolean =
+        !this.excludeUnused(headerName) && !this.excludeAll(headerId)
+
+internal fun getFilteredHeaders(
+        nativeIndex: NativeIndexImpl,
+        index: CXIndex,
+        translationUnit: CXTranslationUnit
+): Set<CXFile?> {
+    val library = nativeIndex.library
+    val result = mutableSetOf<CXFile?>()
     val topLevelFiles = mutableListOf<CXFile>()
     var mainFile: CXFile? = null
 
@@ -438,11 +474,7 @@ internal fun getFilteredHeaders(library: NativeLibrary, index: CXIndex, translat
                 name
             } else {
                 // If it is included with `#include "$name"`, then `name` can also be the path relative to the includer.
-                val includerFile = memScoped {
-                    val fileVar = alloc<CXFileVar>()
-                    clang_getFileLocation(includeLocation, fileVar.ptr, null, null, null)
-                    fileVar.value!!
-                }
+                val includerFile = includeLocation.getContainingFile()!!
                 val includerName = headerToName[includerFile] ?: ""
                 val includerPath = clang_getFileName(includerFile).convertAndDispose()
 
@@ -456,7 +488,7 @@ internal fun getFilteredHeaders(library: NativeLibrary, index: CXIndex, translat
             }
 
             headerToName[file] = headerName
-            if (library.headerFilter(headerName)) {
+            if (library.headerInclusionPolicy.includeAll(headerName, nativeIndex.getHeaderId(file))) {
                 result.add(file)
             }
         }
@@ -466,16 +498,47 @@ internal fun getFilteredHeaders(library: NativeLibrary, index: CXIndex, translat
         ModulesMap(library, translationUnit).use { modulesMap ->
             val topLevelModules = topLevelFiles.map { modulesMap.getModule(it) }.toSet()
             result.removeAll {
-                val module = modulesMap.getModule(it)
+                val module = modulesMap.getModule(it!!)
                 module !in topLevelModules
             }
             // Note: if some of the top-level headers don't belong to modules,
             // then all non-modular headers are included.
         }
+    } else {
+        if (library.headerInclusionPolicy.includeAll(headerName = null, headerId = nativeIndex.getHeaderId(null))) {
+            // Builtins.
+            result.add(null)
+        }
     }
-
 
     result.add(mainFile!!)
 
     return result
+}
+
+fun ObjCMethod.replaces(other: ObjCMethod): Boolean =
+        this.isClass == other.isClass && this.selector == other.selector
+
+fun ObjCProperty.replaces(other: ObjCProperty): Boolean =
+        this.getter.replaces(other.getter)
+
+fun File.sha256(): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    DigestInputStream(this.inputStream(), digest).use { dis ->
+        val buffer = ByteArray(8192)
+        // Read all bytes:
+        while (dis.read(buffer, 0, buffer.size) != -1) {}
+    }
+    // Convert to hex:
+    return digest.digest().joinToString("") {
+        Integer.toHexString((it.toInt() and 0xff) + 0x100).substring(1)
+    }
+}
+
+fun headerContentsHash(filePath: String) = File(filePath).sha256()
+
+internal fun CValue<CXSourceLocation>.getContainingFile(): CXFile? = memScoped {
+    val fileVar = alloc<CXFileVar>()
+    clang_getFileLocation(this@getContainingFile, fileVar.ptr, null, null, null)
+    fileVar.value
 }

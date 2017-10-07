@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
 
-PATH=../../dist/bin:../../bin:$PATH
-DIR=.
+DIR=$(cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd )
+PATH=$DIR/../../dist/bin:$DIR/../../bin:$PATH
 
-# Uncomment flags if your paths differ from these ones.
-CFLAGS_macbook=-I/opt/local/include
-#CFLAGS_macbook=-I/usr/local/include
+CFLAGS_macbook="-I/opt/local/include -compilerOpts -I/usr/local/include"
 CFLAGS_linux=-I/usr/include
-LINKER_ARGS_macbook="-L/opt/local/lib -lgit2"
-#LINKER_ARGS_macbook="-L/usr/local/lib -lgit2"
-LINKER_ARGS_linux="-L/usr/lib/x86_64-linux-gnu -lgit2"
 
 if [ x$TARGET == x ]; then
 case "$OSTYPE" in
@@ -26,5 +21,13 @@ LINKER_ARGS=${!var}
 var=COMPILER_ARGS_${TARGET}
 COMPILER_ARGS=${!var} # add -opt for an optimized build.
 
-cinterop -copt $CFLAGS -def $DIR/libgit2.def -target $TARGET -o libgit2.kt.bc || exit 1
-konanc -target $TARGET src -library libgit2.kt.bc -linkerArgs "$LINKER_ARGS" -o GitChurn.kexe || exit 1
+mkdir -p $DIR/build/c_interop/
+mkdir -p $DIR/build/bin/
+
+cinterop -compilerOpts $CFLAGS -def $DIR/src/main/c_interop/libgit2.def -target $TARGET \
+	 -o $DIR/build/c_interop/libgit2 || exit 1
+
+konanc -target $TARGET $DIR/src/main/kotlin -library $DIR/build/c_interop/libgit2 \
+       -o $DIR/build/bin/GitChurn || exit 1
+
+echo "Artifact path is $DIR/build/bin/GitChurn.kexe"

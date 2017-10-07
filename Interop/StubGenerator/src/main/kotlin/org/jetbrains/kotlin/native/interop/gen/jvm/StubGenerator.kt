@@ -16,17 +16,15 @@
 
 package org.jetbrains.kotlin.native.interop.gen.jvm
 
+import org.jetbrains.kotlin.native.interop.gen.*
 import org.jetbrains.kotlin.native.interop.indexer.*
 import java.lang.IllegalStateException
+import java.util.*
 
 enum class KotlinPlatform {
     JVM,
     NATIVE
 }
-
-private class StubsFragment(val kotlinStubLines: List<String>, val nativeStubLines: List<String> = emptyList())
-
-// TODO: mostly rename 'jni' to 'c'.
 
 class StubGenerator(
         val nativeIndex: NativeIndex,
@@ -34,7 +32,12 @@ class StubGenerator(
         val libName: String,
         val dumpShims: Boolean,
         val verbose: Boolean = false,
-        val platform: KotlinPlatform = KotlinPlatform.JVM) {
+        val platform: KotlinPlatform = KotlinPlatform.JVM,
+        val imports: Imports
+) {
+
+    private var theCounter = 0
+    fun nextUniqueId() = theCounter++
 
     private fun log(message: String) {
         if (verbose) {
@@ -54,31 +57,14 @@ class StubGenerator(
     val excludedFunctions: Set<String>
         get() = configuration.excludedFunctions
 
-    val keywords = setOf(
-            "as", "break", "class", "continue", "do", "else", "false", "for", "fun", "if", "in",
-            "interface", "is", "null", "object", "package", "return", "super", "this", "throw",
-            "true", "try", "typealias", "val", "var", "when", "while"
-    )
-
-    /**
-     * For this identifier constructs the string to be parsed by Kotlin as `SimpleName`
-     * defined [here](https://kotlinlang.org/docs/reference/grammar.html#SimpleName).
-     */
-    fun String.asSimpleName(): String {
-        return if (this in keywords) {
-            "`$this`"
-        } else {
-            this
-        }
-    }
+    val platformWStringTypes = setOf("LPCWSTR")
 
     /**
      * The names that should not be used for struct classes to prevent name clashes
      */
     val forbiddenStructNames = run {
-        val functionNames = nativeIndex.functions.map { it.name }
-        val fieldNames = nativeIndex.structs.mapNotNull { it.def }.flatMap { it.fields }.map { it.name }
-        (functionNames + fieldNames).toSet() + keywords
+        val typedefNames = nativeIndex.typedefs.map { it.name }
+        typedefNames.toSet()
     }
 
     val StructDecl.isAnonymous: Boolean
@@ -104,11 +90,10 @@ class StubGenerator(
                 spelling
             }
 
+            // TODO: don't mangle struct names because it wouldn't work if the struct
+            // is imported into another interop library.
             return if (strippedCName !in forbiddenStructNames) strippedCName else (strippedCName + "Struct")
         }
-
-    val EnumDef.isAnonymous: Boolean
-        get() = spelling.contains("(anonymous ") // TODO: it is a hack
 
     /**
      * Indicates whether this enum should be represented as Kotlin enum.
@@ -146,13 +131,91 @@ class StubGenerator(
             spelling
         }
 
-    val RecordType.kotlinName: String
-        get() = decl.kotlinName
+    val declarationMapper = object : DeclarationMapper {
+        override fun getKotlinClassForPointed(structDecl: StructDecl): Classifier {
+            val baseName = structDecl.kotlinName
+            val pkg = when (platform) {
+                KotlinPlatform.JVM -> pkgName
+                KotlinPlatform.NATIVE -> if (structDecl.def == null) {
+                    cnamesStructsPackageName // to be imported as forward declaration.
+                } else {
+                    getPackageFor(structDecl)
+                }
+            }
+            return Classifier.topLevel(pkg, baseName)
+        }
 
+        override fun isMappedToStrict(enumDef: EnumDef): Boolean = enumDef.isStrictEnum
+
+        override fun getKotlinNameForValue(enumDef: EnumDef): String = enumDef.kotlinName
+
+        override fun getPackageFor(declaration: TypeDeclaration): String {
+            return imports.getPackage(declaration.location) ?: pkgName
+        }
+    }
+
+    fun mirror(type: Type): TypeMirror = mirror(declarationMapper, type)
 
     val functionsToBind = nativeIndex.functions.filter { it.name !in excludedFunctions }
 
     private val macroConstantsByName = nativeIndex.macroConstants.associateBy { it.name }
+
+    val kotlinFile = KotlinFile(pkgName, namesToBeDeclared = computeNamesToBeDeclared())
+
+    private fun computeNamesToBeDeclared(): MutableList<String> {
+        return mutableListOf<String>().apply {
+            nativeIndex.typedefs.forEach {
+                getTypeDeclaringNames(Typedef(it), this)
+            }
+
+            nativeIndex.objCProtocols.forEach {
+                add(it.kotlinClassName(isMeta = false))
+                add(it.kotlinClassName(isMeta = true))
+            }
+
+            nativeIndex.objCClasses.forEach {
+                add(it.kotlinClassName(isMeta = false))
+                add(it.kotlinClassName(isMeta = true))
+            }
+
+            nativeIndex.structs.forEach {
+                getTypeDeclaringNames(RecordType(it), this)
+            }
+
+            nativeIndex.enums.forEach {
+                if (!it.isAnonymous) {
+                    getTypeDeclaringNames(EnumType(it), this)
+                }
+            }
+        }
+    }
+
+    /**
+     * Finds all names to be declared for the given type declaration,
+     * and adds them to [result].
+     *
+     * TODO: refactor to compute these names directly from declarations.
+     */
+    private fun getTypeDeclaringNames(type: Type, result: MutableList<String>) {
+        if (type.unwrapTypedefs() == VoidType) {
+            return
+        }
+
+        val mirror = mirror(type)
+        val varClassifier = mirror.pointedType.classifier
+        if (varClassifier.pkg == pkgName) {
+            result.add(varClassifier.topLevelName)
+        }
+        when (mirror) {
+            is TypeMirror.ByValue -> {
+                val valueClassifier = mirror.valueType.classifier
+                if (valueClassifier.pkg == pkgName && valueClassifier.topLevelName != varClassifier.topLevelName) {
+                    result.add(valueClassifier.topLevelName)
+                }
+            }
+            is TypeMirror.ByRef -> {}
+        }
+    }
 
     /**
      * The output currently used by the generator.
@@ -182,9 +245,11 @@ class StubGenerator(
         return withOutput({ appendable.appendln(it) }, action)
     }
 
-    private fun generateKotlinFragmentBy(block: () -> Unit): StubsFragment {
+    private fun generateKotlinFragmentBy(block: () -> Unit): KotlinStub {
         val lines = generateLinesBy(block)
-        return StubsFragment(kotlinStubLines = lines)
+        return object : KotlinStub {
+            override fun generate(context: StubGenerationContext) = lines.asSequence()
+        }
     }
 
     private fun <R> indent(action: () -> R): R {
@@ -201,302 +266,7 @@ class StubGenerator(
         return res
     }
 
-    /**
-     * Returns the expression which could be used for this type in C code.
-     *
-     * TODO: use libclang to implement:
-     */
-    fun Type.getStringRepresentation(): String {
-        return when (this) {
-            is VoidType -> "void"
-            is CharType -> "char"
-            is IntegerType -> this.spelling
-            is FloatingType -> this.spelling
-
-            is PointerType -> {
-                val pointeeType = this.pointeeType
-                if (pointeeType is FunctionType) {
-                    "void*" // TODO
-                } else {
-                    pointeeType.getStringRepresentation() + "*"
-                }
-            }
-
-            is RecordType -> this.decl.spelling
-
-            is ArrayType -> "void*" // TODO
-
-            is EnumType -> if (this.def.isAnonymous) {
-                this.def.baseType.getStringRepresentation()
-            } else {
-                this.def.spelling
-            }
-
-            is Typedef -> this.def.name
-
-            else -> throw kotlin.NotImplementedError()
-        }
-    }
-
-    val PrimitiveType.kotlinType: String
-        get() = when (this) {
-            is CharType -> "Byte"
-
-            // TODO: C primitive types should probably be generated as type aliases for Kotlin types.
-            is IntegerType -> when (this.size) {
-                1 -> "Byte"
-                2 -> "Short"
-                4 -> "Int"
-                8 -> "Long"
-                else -> TODO(this.toString())
-            }
-
-            is FloatingType -> when (this.size) {
-                4 -> "Float"
-                8 -> "Double"
-                else -> TODO(this.toString())
-            }
-
-            else -> throw NotImplementedError()
-        }
-
-    /**
-     * Describes the Kotlin types used to represent some C type.
-     */
-    private sealed class TypeMirror(val pointedTypeName: String, val info: TypeInfo) {
-        /**
-         * Type to be used in bindings for argument or return value.
-         */
-        abstract val argType: String
-
-        /**
-         * Mirror for C type to be represented in Kotlin as by-value type.
-         */
-        class ByValue(pointedTypeName: String, info: TypeInfo, val valueTypeName: String) :
-                TypeMirror(pointedTypeName, info) {
-
-            override val argType: String
-                get() = valueTypeName + if (info is TypeInfo.Pointer) "?" else ""
-        }
-
-        /**
-         * Mirror for C type to be represented in Kotlin as by-ref type.
-         */
-        class ByRef(pointedTypeName: String, info: TypeInfo) : TypeMirror(pointedTypeName, info) {
-            override val argType: String
-                get() = pointedTypeName
-        }
-    }
-
-    /**
-     * Describes various type conversions for [TypeMirror].
-     */
-    private sealed class TypeInfo {
-        /**
-         * The conversion from [TypeMirror.argType] to [jniType].
-         */
-        abstract fun argToJni(name: String): String
-
-        /**
-         * The conversion from [jniType] to [TypeMirror.argType].
-         */
-        abstract fun argFromJni(name: String): String
-
-        /**
-         * The type to be used for passing [TypeMirror.argType] through JNI.
-         */
-        abstract val jniType: String
-
-        /**
-         * If this info is for [TypeMirror.ByValue], then this method describes how to
-         * construct pointed-type from value type.
-         */
-        abstract fun constructPointedType(valueType: String): String
-
-        class Primitive(override val jniType: String, val varTypeName: String) : TypeInfo() {
-
-            override fun argToJni(name: String) = name
-            override fun argFromJni(name: String) = name
-
-            override fun constructPointedType(valueType: String) = "${varTypeName}Of<$valueType>"
-        }
-
-        class Enum(val className: String, val baseType: String) : TypeInfo() {
-            override fun argToJni(name: String) = "$name.value"
-
-            override fun argFromJni(name: String) = "$className.byValue($name)"
-
-            override val jniType: String
-                get() = baseType
-
-            override fun constructPointedType(valueType: String) = "$className.Var" // TODO: improve
-
-        }
-
-        class Pointer(val pointee: String) : TypeInfo() {
-            override fun argToJni(name: String) = "$name.rawValue"
-
-            override fun argFromJni(name: String) = "interpretCPointer<$pointee>($name)"
-
-            override val jniType: String
-                get() = "NativePtr"
-
-            override fun constructPointedType(valueType: String) = "CPointerVarOf<$valueType>"
-        }
-
-        class ByRef(val pointed: String) : TypeInfo() {
-            override fun argToJni(name: String) = "$name.rawPtr"
-
-            override fun argFromJni(name: String) = "interpretPointed<$pointed>($name)"
-
-            override val jniType: String
-                get() = "NativePtr"
-
-            override fun constructPointedType(valueType: String): String {
-                // TODO: this method must not exist
-                throw UnsupportedOperationException()
-            }
-        }
-    }
-
-    private fun mirror(type: PrimitiveType): TypeMirror.ByValue {
-        val varTypeName = when (type) {
-            is CharType -> "ByteVar"
-            is IntegerType -> when (type.size) {
-                1 -> "ByteVar"
-                2 -> "ShortVar"
-                4 -> "IntVar"
-                8 -> "LongVar"
-                else -> TODO(type.toString())
-            }
-            is FloatingType -> when (type.size) {
-                4 -> "FloatVar"
-                8 -> "DoubleVar"
-                else -> TODO(type.toString())
-            }
-            else -> TODO(type.toString())
-        }
-
-        val info = TypeInfo.Primitive(type.kotlinType, varTypeName)
-        return TypeMirror.ByValue(varTypeName, info, type.kotlinType)
-    }
-
-    private fun byRefTypeMirror(pointedTypeName: String) : TypeMirror.ByRef {
-        val info = TypeInfo.ByRef(pointedTypeName)
-        return TypeMirror.ByRef(pointedTypeName, info)
-    }
-
-    private fun mirror(type: Type): TypeMirror = when (type) {
-        is PrimitiveType -> mirror(type)
-
-        is RecordType -> byRefTypeMirror(type.kotlinName.asSimpleName())
-
-        is EnumType -> when {
-            type.def.isStrictEnum -> {
-                val classSimpleName = type.def.kotlinName.asSimpleName()
-                val info = TypeInfo.Enum(classSimpleName, type.def.baseType.kotlinType)
-                TypeMirror.ByValue("$classSimpleName.Var", info, classSimpleName)
-            }
-            !type.def.isAnonymous -> {
-                val baseTypeMirror = mirror(type.def.baseType)
-                val name = type.def.kotlinName
-                TypeMirror.ByValue("${name}Var", baseTypeMirror.info, name.asSimpleName())
-            }
-            else -> mirror(type.def.baseType)
-        }
-
-        is PointerType -> {
-            val pointeeType = type.pointeeType
-            val unwrappedPointeeType = pointeeType.unwrapTypedefs()
-            if (unwrappedPointeeType is VoidType) {
-                val info = TypeInfo.Pointer("COpaque")
-                TypeMirror.ByValue("COpaquePointerVar", info, "COpaquePointer")
-            } else if (unwrappedPointeeType is ArrayType) {
-                mirror(pointeeType)
-            } else {
-                val pointeeMirror = mirror(pointeeType)
-                val info = TypeInfo.Pointer(pointeeMirror.pointedTypeName)
-                TypeMirror.ByValue("CPointerVar<${pointeeMirror.pointedTypeName}>", info,
-                        "CPointer<${pointeeMirror.pointedTypeName}>")
-            }
-        }
-
-        is ArrayType -> {
-            // TODO: array type doesn't exactly correspond neither to pointer nor to value.
-            val elemTypeMirror = mirror(type.elemType)
-            if (type.elemType.unwrapTypedefs() is ArrayType) {
-                elemTypeMirror
-            } else {
-                val info = TypeInfo.Pointer(elemTypeMirror.pointedTypeName)
-                TypeMirror.ByValue("CArrayPointerVar<${elemTypeMirror.pointedTypeName}>", info,
-                        "CArrayPointer<${elemTypeMirror.pointedTypeName}>")
-            }
-        }
-
-        is FunctionType -> byRefTypeMirror("CFunction<${getKotlinFunctionType(type)}>")
-
-        is Typedef -> {
-            val baseType = mirror(type.def.aliased)
-            val name = type.def.name
-            when (baseType) {
-                is TypeMirror.ByValue -> TypeMirror.ByValue("${name}Var", baseType.info, name.asSimpleName())
-                is TypeMirror.ByRef -> TypeMirror.ByRef(name.asSimpleName(), baseType.info)
-            }
-
-        }
-
-        else -> TODO(type.toString())
-    }
-
-    /**
-     * Describes how to represent in Kotlin the value to be passed to native code.
-     *
-     * @param kotlinType the name of Kotlin type to be used for this value in Kotlin.
-     * @param kotlinConv the function such that `kotlinConv(name)` converts variable `name` to pass it into JNI stub
-     * @param memScoped the conversion allocates memory and should be placed into `memScoped {}` block
-     * @param kotlinJniBridgeType the name of Kotlin type to be used for this value in JNI stub
-     */
-    class OutValueBinding(val kotlinType: String,
-                          val kotlinConv: ((String) -> String)? = null,
-                          val memScoped: Boolean = false,
-                          val kotlinJniBridgeType: String = kotlinType)
-
-    /**
-     * Describes how to represent in Kotlin the value to be received from native code.
-     *
-     * @param kotlinJniBridgeType the name of Kotlin type to be used for this value in JNI stub
-     * @param conv the function such that `conv(name)` converts variable `name` received from JNI stub to `kotlinType`.
-     * @param kotlinType the name of Kotlin type to be used for this value in Kotlin.
-     */
-    class InValueBinding(val kotlinJniBridgeType: String,
-                         val conv: ((String) -> String) = { it },
-                         val kotlinType: String = kotlinJniBridgeType)
-
-    /**
-     * Constructs [OutValueBinding] for the value of given C type.
-     */
-    fun getOutValueBinding(type: Type): OutValueBinding {
-        if (type.unwrapTypedefs() is RecordType) {
-            // TODO: this case should probably be handled more generally.
-            val typeMirror = mirror(type)
-            return OutValueBinding(
-                    kotlinType = "CValue<${typeMirror.pointedTypeName}>",
-                    kotlinConv = { name -> "$name.getPointer(memScope).rawValue" }, // TODO: eliminate this copying
-                    memScoped = true,
-                    kotlinJniBridgeType = "NativePtr"
-            )
-        }
-
-        val mirror = mirror(type)
-
-        return OutValueBinding(
-                kotlinType = mirror.argType,
-                kotlinConv = mirror.info::argToJni,
-                kotlinJniBridgeType = mirror.info.jniType
-        )
-    }
-
-    fun representCFunctionParameterAsValuesRef(type: Type): Type? {
+    fun representCFunctionParameterAsValuesRef(type: Type): KotlinType? {
         val pointeeType = when (type) {
             is PointerType -> type.pointeeType
             is ArrayType -> type.elemType
@@ -504,8 +274,14 @@ class StubGenerator(
         }
 
         val unwrappedPointeeType = pointeeType.unwrapTypedefs()
-        if (unwrappedPointeeType is VoidType || unwrappedPointeeType is FunctionType) {
-            // Passing `void`s or function by value is not very sane:
+
+        if (unwrappedPointeeType is VoidType) {
+            // Represent `void*` as `CValuesRef<*>?`:
+            return KotlinTypes.cValuesRef.typeWith(StarProjection).makeNullable()
+        }
+
+        if (unwrappedPointeeType is FunctionType) {
+            // Don't represent function pointer as `CValuesRef<T>?` currently:
             return null
         }
 
@@ -513,7 +289,17 @@ class StubGenerator(
             return representCFunctionParameterAsValuesRef(pointeeType)
         }
 
-        return pointeeType
+
+        return KotlinTypes.cValuesRef.typeWith(mirror(pointeeType).pointedType).makeNullable()
+    }
+
+    private fun Type.isAliasOf(names: Set<String>): Boolean {
+        var type = this
+        while (type is Typedef) {
+            if (names.contains(type.def.name)) return true
+            type = type.def.aliased
+        }
+        return false
     }
 
     fun representCFunctionParameterAsString(type: Type): Boolean {
@@ -522,81 +308,8 @@ class StubGenerator(
                 unwrappedType.pointeeType.unwrapTypedefs() == CharType
     }
 
-    fun getCFunctionParamBinding(type: Type): OutValueBinding {
-        if (representCFunctionParameterAsString(type)) {
-            return OutValueBinding(
-                    kotlinType = "String?", // TODO: mention the C type (e.g. with annotation).
-                    kotlinConv = { name -> "$name?.cstr?.getPointer(memScope).rawValue" },
-                    memScoped = true,
-                    kotlinJniBridgeType = "NativePtr"
-            )
-        }
-
-        representCFunctionParameterAsValuesRef(type)?.let {
-            val pointeeMirror = mirror(it)
-            return OutValueBinding(
-                    kotlinType = "CValuesRef<${pointeeMirror.pointedTypeName}>?",
-                    kotlinConv = { name -> "$name?.getPointer(memScope).rawValue" },
-                    memScoped = true,
-                    kotlinJniBridgeType = "NativePtr"
-            )
-        }
-
-        return getOutValueBinding(type)
-    }
-
-    fun getCallbackRetValBinding(type: Type): OutValueBinding {
-        if (type.unwrapTypedefs() is VoidType) {
-            return OutValueBinding(
-                    kotlinType = "Unit",
-                    kotlinConv = { throw UnsupportedOperationException() },
-                    kotlinJniBridgeType = "void"
-            )
-        }
-
-        return getOutValueBinding(type)
-    }
-
-    /**
-     * Constructs [InValueBinding] for the value of given C type.
-     */
-    fun getInValueBinding(type: Type): InValueBinding  {
-        if (type.unwrapTypedefs() is RecordType) {
-            val typeMirror = mirror(type)
-            return InValueBinding(
-                    kotlinJniBridgeType = "NativePtr",
-                    conv = { name -> "interpretPointed<${typeMirror.pointedTypeName}>($name).readValue()" },
-                    kotlinType = "CValue<${typeMirror.pointedTypeName}>"
-            )
-        }
-
-        val mirror = mirror(type)
-
-        return InValueBinding(
-                kotlinJniBridgeType = mirror.info.jniType,
-                conv = mirror.info::argFromJni,
-                kotlinType = mirror.argType
-        )
-    }
-
-    fun getCFunctionRetValBinding(func: FunctionDecl): InValueBinding {
-        when {
-            func.returnsVoid() -> return InValueBinding("Unit")
-        }
-
-        return getInValueBinding(func.returnType)
-    }
-
-    fun getCallbackParamBinding(type: Type): InValueBinding {
-        return getInValueBinding(type)
-    }
-
-    private fun getKotlinFunctionType(type: FunctionType): String {
-        return "(" +
-                type.parameterTypes.map { getCallbackParamBinding(it).kotlinType }.joinToString(", ") +
-                ") -> " +
-                getCallbackRetValBinding(type.returnType).kotlinType
-    }
+    // We take this approach as generic 'const short*' shall not be used as String.
+    fun representCFunctionParameterAsWString(type: Type)= type.isAliasOf(platformWStringTypes)
 
     private fun getArrayLength(type: ArrayType): Long {
         val unwrappedElementType = type.elemType.unwrapTypedefs()
@@ -631,21 +344,23 @@ class StubGenerator(
             }
         }
 
-        block("class ${decl.kotlinName.asSimpleName()}(override val rawPtr: NativePtr) : CStructVar()") {
+        val kotlinName = kotlinFile.declare(declarationMapper.getKotlinClassForPointed(decl))
+
+        block("class $kotlinName(rawPtr: NativePtr) : CStructVar(rawPtr)") {
             out("")
             out("companion object : Type(${def.size}, ${def.align})") // FIXME: align
             out("")
             for (field in def.fields) {
-                if (field.name.isEmpty()) continue
-
                 try {
+                    assert(field.name.isNotEmpty())
+
                     if (field.offset < 0) throw NotImplementedError();
                     assert(field.offset % 8 == 0L)
                     val offset = field.offset / 8
                     val fieldRefType = mirror(field.type)
                     val unwrappedFieldType = field.type.unwrapTypedefs()
                     if (unwrappedFieldType is ArrayType) {
-                        val type = (fieldRefType as TypeMirror.ByValue).valueTypeName
+                        val type = (fieldRefType as TypeMirror.ByValue).valueType.render(kotlinFile)
 
                         if (platform == KotlinPlatform.JVM) {
                             val length = getArrayLength(unwrappedFieldType)
@@ -657,13 +372,13 @@ class StubGenerator(
                         out("val ${field.name.asSimpleName()}: $type")
                         out("    get() = arrayMemberAt($offset)")
                     } else {
+                        val pointedTypeName = fieldRefType.pointedType.render(kotlinFile)
                         if (fieldRefType is TypeMirror.ByValue) {
-                            val pointedTypeName = fieldRefType.pointedTypeName
-                            out("var ${field.name.asSimpleName()}: ${fieldRefType.argType}")
+                            out("var ${field.name.asSimpleName()}: ${fieldRefType.argType.render(kotlinFile)}")
                             out("    get() = memberAt<$pointedTypeName>($offset).value")
                             out("    set(value) { memberAt<$pointedTypeName>($offset).value = value }")
                         } else {
-                            out("val ${field.name.asSimpleName()}: ${fieldRefType.pointedTypeName}")
+                            out("val ${field.name.asSimpleName()}: $pointedTypeName")
                             out("    get() = memberAt($offset)")
                         }
                     }
@@ -672,14 +387,51 @@ class StubGenerator(
                     log("Warning: cannot generate definition for field ${decl.kotlinName}.${field.name}")
                 }
             }
+
+            if (platform == KotlinPlatform.NATIVE) {
+                for (field in def.bitFields) {
+                    val typeMirror = mirror(field.type)
+                    val typeInfo = typeMirror.info
+                    val kotlinType = typeMirror.argType.render(kotlinFile)
+                    val rawType = typeInfo.bridgedType
+
+                    out("var ${field.name.asSimpleName()}: $kotlinType")
+
+                    val signed = field.type.getUnderlyingIntegerType().isSigned
+
+                    val readBitsExpr =
+                            "readBits(this.rawPtr, ${field.offset}, ${field.size}, $signed).${rawType.convertor!!}()"
+
+                    out("    get() = ${typeInfo.argFromBridged(readBitsExpr, kotlinFile)}")
+
+                    val rawValue = typeInfo.argToBridged("value")
+                    val setExpr = "writeBits(this.rawPtr, ${field.offset}, ${field.size}, $rawValue.toLong())"
+                    out("    set(value) = $setExpr")
+                    out("")
+                }
+            }
         }
+    }
+
+    private tailrec fun Type.getUnderlyingIntegerType(): IntegerType = when (this) {
+        is IntegerType -> this
+        is EnumType -> this.def.baseType.getUnderlyingIntegerType()
+        is Typedef -> this.def.aliased.getUnderlyingIntegerType()
+        else -> error(this)
     }
 
     /**
      * Produces to [out] the definition of Kotlin class representing the reference to given forward (incomplete) struct.
      */
-    private fun generateForwardStruct(s: StructDecl) {
-        out("class ${s.kotlinName.asSimpleName()}(override val rawPtr: NativePtr) : COpaque")
+    private fun generateForwardStruct(s: StructDecl) = when (platform) {
+        KotlinPlatform.JVM -> out("class ${s.kotlinName.asSimpleName()}(rawPtr: NativePtr) : COpaque(rawPtr)")
+        KotlinPlatform.NATIVE -> {}
+    }
+
+    private fun EnumConstant.isMoreCanonicalThan(other: EnumConstant): Boolean = with(other.name.toLowerCase()) {
+        contains("min") || contains("max") ||
+                contains("first") || contains("last") ||
+                contains("begin") || contains("end")
     }
 
     /**
@@ -692,23 +444,45 @@ class StubGenerator(
         }
 
         val baseTypeMirror = mirror(e.baseType)
+        val baseKotlinType = baseTypeMirror.argType.render(kotlinFile)
 
-        block("enum class ${e.kotlinName.asSimpleName()}(override val value: ${e.baseType.kotlinType}) : CEnum") {
-            e.constants.forEach {
+        val canonicalsByValue = e.constants
+                .groupingBy { it.value }
+                .reduce { _, accumulator, element ->
+                    if (element.isMoreCanonicalThan(accumulator)) {
+                        element
+                    } else {
+                        accumulator
+                    }
+                }
+
+        val (canonicalConstants, aliasConstants) = e.constants.partition { canonicalsByValue[it.value] == it }
+
+        val clazz = (mirror(EnumType(e)) as TypeMirror.ByValue).valueType.classifier
+
+        block("enum class ${kotlinFile.declare(clazz)}(override val value: $baseKotlinType) : CEnum") {
+            canonicalConstants.forEach {
                 out("${it.name.asSimpleName()}(${it.value}),")
             }
             out(";")
             out("")
             block("companion object") {
-                out("fun byValue(value: ${e.baseType.kotlinType}) = " +
+                aliasConstants.forEach {
+                    val mainConstant = canonicalsByValue[it.value]!!
+                    out("val ${it.name.asSimpleName()} = ${mainConstant.name.asSimpleName()}")
+                }
+                if (aliasConstants.isNotEmpty()) out("")
+
+                out("fun byValue(value: $baseKotlinType) = " +
                         "${e.kotlinName.asSimpleName()}.values().find { it.value == value }!!")
             }
             out("")
-            block("class Var(override val rawPtr: NativePtr) : CEnumVar()") {
-                out("companion object : Type(${baseTypeMirror.pointedTypeName}.size.toInt())")
+            block("class Var(rawPtr: NativePtr) : CEnumVar(rawPtr)") {
+                val basePointedTypeName = baseTypeMirror.pointedType.render(kotlinFile)
+                out("companion object : Type($basePointedTypeName.size.toInt())")
                 out("var value: ${e.kotlinName.asSimpleName()}")
-                out("    get() = byValue(this.reinterpret<${baseTypeMirror.pointedTypeName}>().value)")
-                out("    set(value) { this.reinterpret<${baseTypeMirror.pointedTypeName}>().value = value.value }")
+                out("    get() = byValue(this.reinterpret<$basePointedTypeName>().value)")
+                out("    set(value) { this.reinterpret<$basePointedTypeName>().value = value.value }")
             }
         }
     }
@@ -729,12 +503,13 @@ class StubGenerator(
 
         val typeName: String
 
+        val baseKotlinType = mirror(e.baseType).argType.render(kotlinFile)
         if (e.isAnonymous) {
             if (constants.isNotEmpty()) {
                 out("// ${e.spelling}:")
             }
 
-            typeName = e.baseType.kotlinType
+            typeName = baseKotlinType
         } else {
             val typeMirror = mirror(EnumType(e))
             if (typeMirror !is TypeMirror.ByValue) {
@@ -742,19 +517,22 @@ class StubGenerator(
             }
 
             // Generate as typedef:
-            val varTypeName = typeMirror.info.constructPointedType(typeMirror.valueTypeName)
-            out("typealias ${typeMirror.pointedTypeName} = $varTypeName")
-            out("typealias ${typeMirror.valueTypeName} = ${e.baseType.kotlinType}")
+            val varTypeName = typeMirror.info.constructPointedType(typeMirror.valueType).render(kotlinFile)
+            val varTypeClassifier = typeMirror.pointedType.classifier
+            val valueTypeClassifier = typeMirror.valueType.classifier
+            out("typealias ${kotlinFile.declare(varTypeClassifier)} = $varTypeName")
+            out("typealias ${kotlinFile.declare(valueTypeClassifier)} = $baseKotlinType")
 
             if (constants.isNotEmpty()) {
                 out("")
             }
 
-            typeName = typeMirror.valueTypeName
+            typeName = typeMirror.valueType.render(kotlinFile)
         }
 
         for (constant in constants) {
-            out("val ${constant.name.asSimpleName()}: $typeName = ${constant.value}")
+            val literal = integerLiteral(e.baseType, constant.value) ?: continue
+            out("val ${constant.name.asSimpleName()}: $typeName = $literal")
         }
     }
 
@@ -762,211 +540,150 @@ class StubGenerator(
         val mirror = mirror(Typedef(def))
         val baseMirror = mirror(def.aliased)
 
+        val varType = mirror.pointedType
         when (baseMirror) {
             is TypeMirror.ByValue -> {
-                val valueTypeName = (mirror as TypeMirror.ByValue).valueTypeName
-                val varTypeAliasee = mirror.info.constructPointedType(valueTypeName)
-                out("typealias ${mirror.pointedTypeName} = $varTypeAliasee")
-                out("typealias $valueTypeName = ${baseMirror.valueTypeName}")
+                val valueType = (mirror as TypeMirror.ByValue).valueType
+                val varTypeAliasee = mirror.info.constructPointedType(valueType).render(kotlinFile)
+                val valueTypeAliasee = baseMirror.valueType.render(kotlinFile)
+
+                out("typealias ${kotlinFile.declare(varType.classifier)} = $varTypeAliasee")
+                out("typealias ${kotlinFile.declare(valueType.classifier)} = $valueTypeAliasee")
             }
             is TypeMirror.ByRef -> {
-                out("typealias ${mirror.pointedTypeName} = ${baseMirror.pointedTypeName}")
+                val varTypeAliasee = baseMirror.pointedType.render(kotlinFile)
+                out("typealias ${kotlinFile.declare(varType.classifier)} = $varTypeAliasee")
             }
         }
     }
 
-    private fun generateStubsForFunction(func: FunctionDecl): StubsFragment {
-        val kotlinStubLines = generateLinesBy {
-            generateKotlinBindingMethod(func)
-            if (func.requiresKotlinAdapter()) {
-                out("")
-                generateKotlinExternalMethod(func)
-            }
-        }
-
-        val nativeStubLines = generateLinesBy {
-            generateCJniFunction(func)
-        }
-
-        return StubsFragment(kotlinStubLines, nativeStubLines)
-    }
-
-    private fun generateStubsForFunctions(functions: List<FunctionDecl>): List<StubsFragment> {
+    private fun generateStubsForFunctions(functions: List<FunctionDecl>): List<KotlinStub> {
         val stubs = functions.mapNotNull {
             try {
-                generateStubsForFunction(it)
+                KotlinFunctionStub(it)
             } catch (e: Throwable) {
                 log("Warning: cannot generate stubs for function ${it.name}")
                 null
             }
         }
 
-        return stubs.map { it.nativeStubLines }
-                .mapFragmentIsCompilable(libraryForCStubs)
-                .mapIndexedNotNull { index, stubIsCompilable ->
-                    if (stubIsCompilable) {
-                        stubs[index]
-                    } else {
-                        null
-                    }
-                }
+        return stubs
     }
 
     private fun FunctionDecl.generateAsFfiVarargs(): Boolean = (platform == KotlinPlatform.NATIVE && this.isVararg &&
             // Neither takes nor returns structs by value:
             !this.returnsRecord() && this.parameters.all { it.type.unwrapTypedefs() !is RecordType })
 
-    /**
-     * Constructs [InValueBinding] for return value of Kotlin binding for given C function.
-     */
-    private fun retValBinding(func: FunctionDecl) = getCFunctionRetValBinding(func)
-
     private fun FunctionDecl.returnsRecord(): Boolean = this.returnType.unwrapTypedefs() is RecordType
     private fun FunctionDecl.returnsVoid(): Boolean = this.returnType.unwrapTypedefs() is VoidType
 
-    /**
-     * Constructs [OutValueBinding]s for parameters of Kotlin binding for given C function.
-     */
-    private fun paramBindings(func: FunctionDecl): Array<OutValueBinding> {
-        val paramBindings = func.parameters.map { param ->
-            getCFunctionParamBinding(param.type)
-        }.toMutableList()
+    private inner class KotlinFunctionStub(val func: FunctionDecl) : KotlinStub, NativeBacked {
+        override fun generate(context: StubGenerationContext): Sequence<String> =
+                if (context.nativeBridges.isSupported(this)) {
+                    block(header, bodyLines)
+                } else {
+                    sequenceOf(
+                            annotationForUnableToImport,
+                            "external $header"
+                    )
+                }
 
-        if (func.returnsRecord()) {
-            paramBindings.add(OutValueBinding(
-                    kotlinType = "should not be used",
-                    kotlinConv = { throw UnsupportedOperationException() },
-                    kotlinJniBridgeType = "NativePtr"
-            ))
-        }
+        private val header: String
+        private val bodyLines: List<String>
 
-        return paramBindings.toTypedArray()
-    }
+        init {
+            // TODO: support dumpShims
+            val kotlinParameters = mutableListOf<Pair<String, KotlinType>>()
+            val bodyGenerator = KotlinCodeBuilder()
+            val bridgeArguments = mutableListOf<TypedKotlinValue>()
 
-    /**
-     * Returns names for parameters of Kotlin binding for given C function.
-     */
-    private fun paramNames(func: FunctionDecl): Array<String> {
-        val paramNames = func.parameters.mapIndexed { i: Int, parameter: Parameter ->
-            val name = parameter.name
-            if (name != null && name != "") {
-                name
-            } else {
-                "arg$i"
+            func.parameters.forEachIndexed { index, parameter ->
+                val parameterName = parameter.name.let {
+                    if (it == null || it.isEmpty()) {
+                        "arg$index"
+                    } else {
+                        it.asSimpleName()
+                    }
+                }
+
+                val representAsValuesRef = representCFunctionParameterAsValuesRef(parameter.type)
+
+                val bridgeArgument = if (representCFunctionParameterAsString(parameter.type)) {
+                    kotlinParameters.add(parameterName to KotlinTypes.string.makeNullable())
+                    bodyGenerator.pushMemScoped()
+                    "$parameterName?.cstr?.getPointer(memScope)"
+                } else if (representCFunctionParameterAsWString(parameter.type)) {
+                    kotlinParameters.add(parameterName to KotlinTypes.string.makeNullable())
+                    bodyGenerator.pushMemScoped()
+                    "$parameterName?.wcstr?.getPointer(memScope)"
+                } else if (representAsValuesRef != null) {
+                    kotlinParameters.add(parameterName to representAsValuesRef)
+                    bodyGenerator.pushMemScoped()
+                    "$parameterName?.getPointer(memScope)"
+                } else {
+                    val mirror = mirror(parameter.type)
+                    kotlinParameters.add(parameterName to mirror.argType)
+                    parameterName
+                }
+
+                bridgeArguments.add(TypedKotlinValue(parameter.type, bridgeArgument))
             }
-        }.toMutableList()
 
-        if (func.returnsRecord()) {
-            paramNames.add("retValPlacement")
-        }
-
-        return paramNames.toTypedArray()
-    }
-
-    /**
-     * Produces to [out] the definition of Kotlin binding for given C function.
-     */
-    private fun generateKotlinBindingMethod(func: FunctionDecl) {
-        val paramNames = paramNames(func).toList().let {
-            if (func.returnsRecord()) {
-                // The last parameter should be present only in C adapter.
-                it.dropLast(1)
+            if (!func.generateAsFfiVarargs()) {
+                val result = mappingBridgeGenerator.kotlinToNative(
+                        bodyGenerator,
+                        this,
+                        func.returnType,
+                        bridgeArguments
+                ) { nativeValues ->
+                    "${func.name}(${nativeValues.joinToString()})"
+                }
+                bodyGenerator.out("return $result")
             } else {
-                it
-            }
-        }
-        val paramBindings = paramBindings(func)
-        val retValBinding = retValBinding(func)
+                val returnTypeKind = getFfiTypeKind(func.returnType)
 
-        val args = paramNames.mapIndexed { i: Int, name: String ->
-            "${name.asSimpleName()}: " + paramBindings[i].kotlinType
-        }.joinToString(", ")
+                kotlinParameters.add("vararg variadicArguments" to KotlinTypes.any.makeNullable())
+                bodyGenerator.pushMemScoped()
 
-        if (func.generateAsFfiVarargs()) {
-            val returnTypeKind = getFfiTypeKind(func.returnType)
+                val resultVar = "kniResult"
 
-            val variadicParameter = "vararg variadicArguments: Any?"
-            val allParameters = if (args.isEmpty()) variadicParameter else "$args, $variadicParameter"
-            val header = "fun ${func.name.asSimpleName()}($allParameters): ${retValBinding.kotlinType} = memScoped"
-            val returnValueMirror = mirror(func.returnType)
-            block(header) {
                 val resultPtr = if (!func.returnsVoid()) {
-                    val returnType = returnValueMirror.pointedTypeName
-                    out("val resultVar = allocFfiReturnValueBuffer<$returnType>(typeOf<$returnType>())")
-                    "resultVar.rawPtr"
+                    val returnType = mirror(func.returnType).pointedType.render(kotlinFile)
+                    bodyGenerator.out("val $resultVar = allocFfiReturnValueBuffer<$returnType>(typeOf<$returnType>())")
+                    "$resultVar.rawPtr"
                 } else {
                     "nativeNullPtr"
                 }
-                val fixedArguments = paramNames.joinToString(", ") { it.asSimpleName() }
-                out("callWithVarargs(${func.kotlinExternalName}(), $resultPtr, $returnTypeKind, " +
+                val fixedArguments = bridgeArguments.joinToString(", ") { it.value }
+
+                val functionPtr = simpleBridgeGenerator.kotlinToNative(
+                        this,
+                        BridgedType.NATIVE_PTR,
+                        emptyList()
+                ) {
+                    func.name
+                }
+
+                bodyGenerator.out("callWithVarargs($functionPtr, $resultPtr, $returnTypeKind, " +
                         "arrayOf($fixedArguments), variadicArguments, memScope)")
 
                 if (!func.returnsVoid()) {
-                    out("resultVar.value")
+                    bodyGenerator.out("return $resultVar.value")
                 }
             }
-            return
-        }
 
-        val header = "fun ${func.name.asSimpleName()}($args): ${retValBinding.kotlinType}"
-
-        if (!func.requiresKotlinAdapter()) {
-            assert(platform == KotlinPlatform.NATIVE)
-            out(func.symbolNameAnnotation)
-            out("external $header")
-            return
-        }
-
-        fun generateBody(memScoped: Boolean) {
-            val arguments = paramNames.mapIndexed { i: Int, name: String ->
-                val binding = paramBindings[i]
-                val externalParamName: String
-
-                if (binding.kotlinConv != null) {
-                    externalParamName = "_$name"
-                    out("val $externalParamName = " + binding.kotlinConv.invoke(name.asSimpleName()))
-                } else {
-                    externalParamName = name.asSimpleName()
-                }
-
-                externalParamName
-
-            }.toMutableList()
-
-            if (func.returnsRecord()) {
-                val retValMirror = mirror(func.returnType)
-                arguments.add("alloc<${retValMirror.pointedTypeName}>().rawPtr")
-            }
-
-            val callee = func.kotlinExternalName
-            out("val res = $callee(" + arguments.joinToString(", ") + ")")
-
-            val result = retValBinding.conv("res")
-            if (dumpShims) {
-                val returnValueRepresentation  = result
-                out("print(\"\${${returnValueRepresentation}}\\t= \")")
-                out("print(\"${func.name}( \")")
-                val argsRepresentation = paramNames.map{"\${${it}}"}.joinToString(", ")
-                out("print(\"${argsRepresentation}\")")
-                out("println(\")\")")
-            }
-
-            if (memScoped) {
-                out(result)
+            val returnType = if (func.returnsVoid()) {
+                KotlinTypes.unit
             } else {
-                out("return " + result)
-            }
-        }
+                mirror(func.returnType).argType
+            }.render(kotlinFile)
 
-        block(header) {
-            val memScoped = paramBindings.any { it.memScoped } || func.returnsRecord()
-            if (memScoped) {
-                block("return memScoped") {
-                    generateBody(true)
-                }
-            } else {
-                generateBody(false)
+            val joinedKotlinParameters = kotlinParameters.joinToString { (name, type) ->
+                "$name: ${type.render(kotlinFile)}"
             }
+            this.header = "fun ${func.name}($joinedKotlinParameters): $returnType"
+
+            this.bodyLines = bodyGenerator.build()
         }
     }
 
@@ -992,49 +709,6 @@ class StubGenerator(
         }
     }
 
-    /**
-     * Returns the expression to be parsed by Kotlin as string literal with given contents,
-     * i.e. transforms `foo$bar` to `"foo\$bar"`.
-     */
-    private fun String.quoteAsKotlinLiteral(): String {
-        val sb = StringBuilder()
-        sb.append('"')
-
-        this.forEach { c ->
-            val escaped = when (c) {
-                in 'a' .. 'z', in 'A' .. 'Z', in '0' .. '9', '_' -> c.toString()
-                '$' -> "\\$"
-                // TODO: improve result readability by preserving more characters.
-                else -> "\\u" + "%04X".format(c.toInt())
-            }
-            sb.append(escaped)
-        }
-
-        sb.append('"')
-        return sb.toString()
-    }
-
-    /**
-     * Returns `true` iff the function binding for Kotlin Native
-     * requires non-trivial Kotlin adapter to convert arguments.
-     */
-    private fun FunctionDecl.requiresKotlinAdapter(): Boolean {
-        // TODO: restore this optimization after refactoring stub generator.
-        return true
-    }
-
-    /**
-     * Returns `true` iff the function binding for Kotlin Native
-     * requires non-trivial C adapter to convert arguments.
-     */
-    private fun FunctionDecl.requiresCAdapter(): Boolean {
-        if (platform != KotlinPlatform.NATIVE) {
-            return true
-        }
-
-        return true
-    }
-
     private fun integerLiteral(type: Type, value: Long): String? {
         if (value == Long.MIN_VALUE) {
             return "${value + 1} - 1" // Workaround for "The value is out of range" compile error.
@@ -1046,10 +720,10 @@ class StubGenerator(
         }
 
         val narrowedValue: Number = when (unwrappedType.kotlinType) {
-            "Byte" -> value.toByte()
-            "Short" -> value.toShort()
-            "Int" -> value.toInt()
-            "Long" -> value
+            KotlinTypes.byte -> value.toByte()
+            KotlinTypes.short -> value.toShort()
+            KotlinTypes.int -> value.toInt()
+            KotlinTypes.long -> value
             else -> return null
         }
 
@@ -1083,7 +757,7 @@ class StubGenerator(
             }
         }
 
-        val kotlinType = mirror(constant.type).argType
+        val kotlinType = mirror(constant.type).argType.render(kotlinFile)
 
         // TODO: improve value rendering.
 
@@ -1095,70 +769,26 @@ class StubGenerator(
         out("val ${constant.name.asSimpleName()}: $kotlinType = $literal")
     }
 
-    /**
-     * The name of C adapter to be used for the function binding for Kotlin Native.
-     */
-    private val FunctionDecl.cStubName: String
-        get() {
-            require(platform == KotlinPlatform.NATIVE)
-            return pkgName.replace('.', '_') + "_kni_" + this.name
-        }
-
-    private val FunctionDecl.kotlinExternalName: String
-        get() {
-            require(this.requiresKotlinAdapter())
-            return "kni_$name"
-        }
-
-    /**
-     * The annotation for an external function on Kotlin Native
-     * to bind it to either the C function itself or the C adapter.
-     */
-    private val FunctionDecl.symbolNameAnnotation: String
-        get() {
-            require(platform == KotlinPlatform.NATIVE)
-            val symbolName = if (requiresCAdapter()) {
-                cStubName
-            } else {
-                // `@SymbolName` annotation on Kotlin Native defines the LLVM function name
-                // which is assumed to match the C function name.
-                // However on some platforms (e.g. macOS) C function names are being mangled.
-                // Using `0x01` prefix prevents LLVM from mangling the name.
-                "\u0001${binaryName}"
-            }
-            return "@SymbolName(${symbolName.quoteAsKotlinLiteral()})"
-        }
-
-    /**
-     * Produces to [out] the definition of Kotlin JNI function used in binding for given C function.
-     */
-    private fun generateKotlinExternalMethod(func: FunctionDecl) {
-        if (func.generateAsFfiVarargs()) {
-            assert (platform == KotlinPlatform.NATIVE)
-            // The C stub simply returns pointer to the function:
-            out(func.symbolNameAnnotation)
-            out("private external fun ${func.kotlinExternalName}(): NativePtr")
-            return
-        }
-
-        val paramNames = paramNames(func)
-        val paramBindings = paramBindings(func)
-        val retValBinding = retValBinding(func)
-
-        val args = paramNames.mapIndexed { i: Int, name: String ->
-            "${name.asSimpleName()}: " + paramBindings[i].kotlinJniBridgeType
-        }.joinToString(", ")
-
-        if (platform == KotlinPlatform.NATIVE) {
-            out(func.symbolNameAnnotation)
-        }
-        out("private external fun ${func.kotlinExternalName}($args): ${retValBinding.kotlinJniBridgeType}")
-    }
-
-    private fun generateStubs(): List<StubsFragment> {
-        val stubs = mutableListOf<StubsFragment>()
+    private fun generateStubs(): List<KotlinStub> {
+        val stubs = mutableListOf<KotlinStub>()
 
         stubs.addAll(generateStubsForFunctions(functionsToBind))
+
+        nativeIndex.objCProtocols.forEach {
+            if (!it.shouldBeImportedAsForwardDeclaration()) {
+                stubs.add(ObjCProtocolStub(this, it))
+            }
+        }
+
+        nativeIndex.objCClasses.forEach {
+            if (!it.shouldBeImportedAsForwardDeclaration()) {
+                stubs.add(ObjCClassStub(this, it))
+            }
+        }
+
+        nativeIndex.objCCategories.mapTo(stubs) {
+            ObjCCategoryStub(this, it)
+        }
 
         nativeIndex.macroConstants.forEach {
             try {
@@ -1167,6 +797,16 @@ class StubGenerator(
                 )
             } catch (e: Throwable) {
                 log("Warning: cannot generate stubs for constant ${it.name}")
+            }
+        }
+
+        nativeIndex.globals.forEach {
+            try {
+                stubs.add(
+                        GlobalVariableStub(it, this)
+                )
+            } catch (e: Throwable) {
+                log("Warning: cannot generate stubs for global ${it.name}")
             }
         }
 
@@ -1206,11 +846,28 @@ class StubGenerator(
     /**
      * Produces to [out] the contents of file with Kotlin bindings.
      */
-    private fun generateKotlinFile(stubs: List<StubsFragment>) {
+    private fun generateKotlinFile(nativeBridges: NativeBridges, stubs: List<KotlinStub>) {
         if (platform == KotlinPlatform.JVM) {
             out("@file:JvmName(${jvmFileClassName.quoteAsKotlinLiteral()})")
         }
-        out("@file:Suppress(\"UNUSED_EXPRESSION\", \"UNUSED_VARIABLE\")")
+        if (platform == KotlinPlatform.NATIVE) {
+            out("@file:kotlinx.cinterop.InteropStubs")
+        }
+
+        val suppress = mutableListOf("UNUSED_VARIABLE", "UNUSED_EXPRESSION").apply {
+            if (configuration.library.language == Language.OBJECTIVE_C) {
+                add("CONFLICTING_OVERLOADS")
+                add("RETURN_TYPE_MISMATCH_ON_INHERITANCE")
+                add("RETURN_TYPE_MISMATCH_ON_OVERRIDE")
+                add("WRONG_MODIFIER_CONTAINING_DECLARATION") // For `final val` in interface.
+                add("PARAMETER_NAME_CHANGED_ON_OVERRIDE")
+                add("UNUSED_PARAMETER") // For constructors.
+                add("MANY_INTERFACES_MEMBER_NOT_IMPLEMENTED") // Workaround for multiple-inherited properties.
+                add("EXTENSION_SHADOWED_BY_MEMBER") // For Objective-C categories represented as extensions.
+            }
+        }
+
+        out("@file:Suppress(${suppress.joinToString { it.quoteAsKotlinLiteral() }})")
         if (pkgName != "") {
             out("package $pkgName")
             out("")
@@ -1219,52 +876,32 @@ class StubGenerator(
             out("import konan.SymbolName")
         }
         out("import kotlinx.cinterop.*")
+
+        kotlinFile.buildImports().forEach {
+            out(it)
+        }
+
         out("")
 
+        val context = object : StubGenerationContext {
+            val topLevelDeclarationLines = mutableListOf<String>()
+
+            override val nativeBridges: NativeBridges get() = nativeBridges
+            override fun addTopLevelDeclaration(lines: List<String>) {
+                topLevelDeclarationLines.addAll(lines)
+            }
+        }
+
         stubs.forEach {
-            it.kotlinStubLines.forEach { out(it) }
+            it.generate(context).forEach(out)
             out("")
         }
 
+        context.topLevelDeclarationLines.forEach(out)
+        nativeBridges.kotlinLines.forEach(out)
         if (platform == KotlinPlatform.JVM) {
             out("private val loadLibrary = System.loadLibrary(\"$libName\")")
         }
-    }
-
-    /**
-     * Returns the C type to be used for value of given Kotlin type in JNI function implementation.
-     */
-    fun getCBridgeType(kotlinJniBridgeType: String): String {
-        return when (platform) {
-            KotlinPlatform.JVM -> getCJniBridgeType(kotlinJniBridgeType)
-            KotlinPlatform.NATIVE -> getCNativeBridgeType(kotlinJniBridgeType)
-        }
-    }
-
-    fun getCNativeBridgeType(kotlinJniBridgeType: String) = when (kotlinJniBridgeType) {
-        "Unit" -> "void"
-        "Byte" -> "int8_t"
-        "Short" -> "int16_t"
-        "Int" -> "int32_t"
-        "Long" -> "int64_t"
-        "Float" -> "float"
-        "Double" -> "double" // TODO: float32_t, float64_t?
-        "NativePtr" -> "void*"
-        else -> TODO(kotlinJniBridgeType)
-    }
-
-    /**
-     * Returns the C type to be used for value of given Kotlin type in JNI function implementation.
-     */
-    fun getCJniBridgeType(kotlinJniBridgeType: String) = when (kotlinJniBridgeType) {
-        "Unit" -> "void"
-        "Byte" -> "jbyte"
-        "Short" -> "jshort"
-        "Int" -> "jint"
-        "Long", "NativePtr" -> "jlong"
-        "Float" -> "jfloat"
-        "Double" -> "jdouble"
-        else -> throw NotImplementedError(kotlinJniBridgeType)
     }
 
     val libraryForCStubs = configuration.library.copy(
@@ -1277,31 +914,31 @@ class StubGenerator(
             },
 
             compilerArgs = configuration.library.compilerArgs + when (platform) {
-                KotlinPlatform.JVM -> listOf("", "linux", "darwin").map {
+                KotlinPlatform.JVM -> listOf("", "linux", "darwin", "win32").map {
                     val javaHome = System.getProperty("java.home")
                     "-I$javaHome/../include/$it"
                 }
                 KotlinPlatform.NATIVE -> emptyList()
-            }
+            },
+
+            additionalPreambleLines = configuration.library.additionalPreambleLines +
+                    when (configuration.library.language) {
+                        Language.C -> emptyList()
+                        Language.OBJECTIVE_C -> listOf("void objc_terminate();")
+                    }
     )
 
     /**
-     * Produces to [out] the contents of C source file to be compiled into JNI lib used for Kotlin bindings impl.
+     * Produces to [out] the contents of C source file to be compiled into native lib used for Kotlin bindings impl.
      */
-    private fun generateCFile(stubs: List<StubsFragment>, entryPoint: String?) {
+    private fun generateCFile(bridges: NativeBridges, entryPoint: String?) {
         libraryForCStubs.preambleLines.forEach {
             out(it)
         }
         out("")
 
-        stubs.forEach {
-            val lines = it.nativeStubLines
-            if (lines.isNotEmpty()) {
-                lines.forEach {
-                    out(it)
-                }
-                out("")
-            }
+        bridges.nativeLines.forEach {
+            out(it)
         }
 
         if (entryPoint != null) {
@@ -1314,99 +951,34 @@ class StubGenerator(
         }
     }
 
-    private tailrec fun Type.unwrapTypedefs(): Type = if (this is Typedef) {
-        this.def.aliased.unwrapTypedefs()
-    } else {
-        this
-    }
-
-    /**
-     * Produces to [out] the implementation of JNI function used in Kotlin binding for given C function.
-     */
-    private fun generateCJniFunction(func: FunctionDecl) {
-        if (func.generateAsFfiVarargs()) {
-            assert (platform == KotlinPlatform.NATIVE)
-            // The C stub simply returns pointer to the function:
-            out("void* ${func.cStubName}() { return ${func.name}; }")
-            return
-        }
-
-        val paramNames = paramNames(func)
-        val paramBindings = paramBindings(func)
-        val retValBinding = retValBinding(func)
-
-        val parameters = paramBindings
-                .map { getCBridgeType(it.kotlinJniBridgeType) }
-                .mapIndexed { i, type -> "$type ${paramNames[i]}" }
-
-        val cReturnType = getCBridgeType(retValBinding.kotlinJniBridgeType)
-
-        val funcDecl = when (platform) {
-            KotlinPlatform.JVM -> {
-                val joinedParameters = if (!parameters.isEmpty()) {
-                    parameters.joinToString(separator = ", ", prefix = ", ")
-                } else {
-                    ""
-                }
-
-                val funcFullName = buildString {
-                    if (pkgName.isNotEmpty()) {
-                        append(pkgName)
-                        append('.')
-                    }
-                    append(jvmFileClassName)
-                    append('.')
-                    append(func.kotlinExternalName)
-                }
-
-                val functionName = "Java_" + funcFullName.replace("_", "_1").replace('.', '_').replace("$", "_00024")
-                "JNIEXPORT $cReturnType JNICALL $functionName (JNIEnv *jniEnv, jclass jclss$joinedParameters)"
-            }
-            KotlinPlatform.NATIVE -> {
-                val joinedParameters = parameters.joinToString(", ")
-                val functionName = func.cStubName
-                "$cReturnType $functionName ($joinedParameters)"
-            }
-        }
-
-        val arguments = func.parameters.mapIndexed { i, parameter ->
-            val cType = parameter.type.getStringRepresentation()
-            val name = paramNames[i]
-            val unwrappedType = parameter.type.unwrapTypedefs()
-            when (unwrappedType) {
-                is RecordType -> "*($cType*)$name"
-                is ArrayType -> {
-                    val pointerCType = PointerType(unwrappedType.elemType).getStringRepresentation()
-                    "($pointerCType)$name"
-                }
-                else -> "($cType)$name"
-            }
-        }.joinToString(", ")
-
-        val callExpr = "${func.name}($arguments)"
-
-        block(funcDecl) {
-
-            if (cReturnType == "void") {
-                out("$callExpr;")
-            } else if (func.returnsRecord()) {
-                out("*(${func.returnType.getStringRepresentation()}*)retValPlacement = $callExpr;")
-                out("return ($cReturnType) retValPlacement;")
-            } else {
-                out("return ($cReturnType) ($callExpr);")
-            }
-        }
-    }
-
     fun generateFiles(ktFile: Appendable, cFile: Appendable, entryPoint: String?) {
         val stubs = generateStubs()
 
+        val nativeBridges = simpleBridgeGenerator.prepare()
+
         withOutput(cFile) {
-            generateCFile(stubs, entryPoint)
+            generateCFile(nativeBridges, entryPoint)
         }
 
         withOutput(ktFile) {
-            generateKotlinFile(stubs)
+            generateKotlinFile(nativeBridges, stubs)
         }
     }
+
+    fun addManifestProperties(properties: Properties) {
+        properties["exportForwardDeclarations"] = nativeIndex.structs
+                .filter { it.def == null }
+                .joinToString(" ") {
+                    "$cnamesStructsPackageName.${it.kotlinName}"
+                }
+
+        // TODO: consider exporting Objective-C class and protocol forward refs.
+    }
+
+    val simpleBridgeGenerator: SimpleBridgeGenerator =
+            SimpleBridgeGeneratorImpl(platform, pkgName, jvmFileClassName, libraryForCStubs, kotlinFile)
+
+    val mappingBridgeGenerator: MappingBridgeGenerator =
+            MappingBridgeGeneratorImpl(declarationMapper, simpleBridgeGenerator, kotlinFile)
+
 }

@@ -16,66 +16,109 @@
 
 package org.jetbrains.kotlin.backend.konan.ir
 
-import org.jetbrains.kotlin.descriptors.FunctionDescriptor
-import org.jetbrains.kotlin.ir.IrStatement
-import org.jetbrains.kotlin.ir.declarations.IrSymbolOwner
+import org.jetbrains.kotlin.descriptors.PackageFragmentDescriptor
+import org.jetbrains.kotlin.descriptors.annotations.AnnotationDescriptor
+import org.jetbrains.kotlin.ir.SourceManager
+import org.jetbrains.kotlin.ir.SourceRangeInfo
+import org.jetbrains.kotlin.ir.declarations.IrDeclaration
+import org.jetbrains.kotlin.ir.declarations.IrFile
 import org.jetbrains.kotlin.ir.declarations.IrVariable
-import org.jetbrains.kotlin.ir.expressions.IrBlock
 import org.jetbrains.kotlin.ir.expressions.IrExpression
-import org.jetbrains.kotlin.ir.expressions.IrStatementOrigin
-import org.jetbrains.kotlin.ir.expressions.impl.IrContainerExpressionBase
 import org.jetbrains.kotlin.ir.expressions.impl.IrExpressionBase
-import org.jetbrains.kotlin.ir.symbols.IrBindableSymbol
-import org.jetbrains.kotlin.ir.symbols.IrFunctionSymbol
-import org.jetbrains.kotlin.ir.symbols.impl.IrBindableSymbolBase
+import org.jetbrains.kotlin.ir.symbols.IrFileSymbol
 import org.jetbrains.kotlin.ir.visitors.IrElementTransformer
 import org.jetbrains.kotlin.ir.visitors.IrElementVisitor
+import org.jetbrains.kotlin.konan.file.File
 import org.jetbrains.kotlin.types.KotlinType
 
 //-----------------------------------------------------------------------------//
+/**
+ * TODO
+ * FileEntry provides mapping file offset to pair line and column which are used in debug information generation.
+ * NaiveSourceBasedFileEntryImpl implements the functionality with calculation lines and columns at compile time,
+ * that obligates user to have sources of all dependencies, that not always possible and intuitively clear. Instead new
+ * version should rely on serialized mapping (offset to pair line and column), which should be generated at library
+ * compilation stage (perhaps in or before inline face)
+*/
 
-interface IrReturnableBlockSymbol : IrFunctionSymbol, IrBindableSymbol<FunctionDescriptor, IrReturnableBlock>
+class NaiveSourceBasedFileEntryImpl(override val name: String) : SourceManager.FileEntry {
 
-interface IrReturnableBlock: IrBlock, IrSymbolOwner {
-    override val symbol: IrReturnableBlockSymbol
-    val descriptor: FunctionDescriptor
-}
+    private val lineStartOffsets: IntArray
 
-class IrReturnableBlockSymbolImpl(descriptor: FunctionDescriptor) :
-        IrBindableSymbolBase<FunctionDescriptor, IrReturnableBlock>(descriptor),
-        IrReturnableBlockSymbol
-
-class IrReturnableBlockImpl(startOffset: Int, endOffset: Int, type: KotlinType,
-                            override val symbol: IrReturnableBlockSymbol, origin: IrStatementOrigin? = null)
-    : IrContainerExpressionBase(startOffset, endOffset, type, origin), IrReturnableBlock {
-
-    override val descriptor = symbol.descriptor
-
-    constructor(startOffset: Int, endOffset: Int, type: KotlinType,
-                descriptor: FunctionDescriptor, origin: IrStatementOrigin? = null) :
-            this(startOffset, endOffset, type, IrReturnableBlockSymbolImpl(descriptor), origin)
-
-    constructor(startOffset: Int, endOffset: Int, type: KotlinType,
-                descriptor: FunctionDescriptor, origin: IrStatementOrigin?, statements: List<IrStatement>) :
-        this(startOffset, endOffset, type, descriptor, origin) {
-        this.statements.addAll(statements)
-    }
+    //-------------------------------------------------------------------------//
 
     init {
-        symbol.bind(this)
-    }
-
-    override fun <R, D> accept(visitor: IrElementVisitor<R, D>, data: D): R =
-        visitor.visitBlock(this, data)
-
-    override fun <D> acceptChildren(visitor: IrElementVisitor<Unit, D>, data: D) {
-        statements.forEach { it.accept(visitor, data) }
-    }
-
-    override fun <D> transformChildren(transformer: IrElementTransformer<D>, data: D) {
-        statements.forEachIndexed { i, irStatement ->
-            statements[i] = irStatement.transform(transformer, data)
+        val file = File(name)
+        if (file.isFile) {
+            val buffer = mutableListOf<Int>()
+            var currentOffset = 0
+            file.forEachLine { line ->
+                buffer.add(currentOffset)
+                currentOffset += line.length
+            }
+            lineStartOffsets = buffer.toIntArray()
+        } else {
+            lineStartOffsets = IntArray(0)
         }
+    }
+
+    //-------------------------------------------------------------------------//
+
+    override fun getLineNumber(offset: Int): Int {
+        val index = lineStartOffsets.binarySearch(offset)
+        return if (index >= 0) index else -index - 1
+    }
+
+    //-------------------------------------------------------------------------//
+
+    override fun getColumnNumber(offset: Int): Int {
+        var lineNumber = getLineNumber(offset)
+        if (lineNumber >= lineStartOffsets.size) {
+            lineNumber = lineStartOffsets.size - 1
+        }
+        if (lineNumber < 0) lineNumber = 0
+        if (lineStartOffsets.size == 0) return offset
+        return offset - lineStartOffsets[lineNumber]
+    }
+
+    //-------------------------------------------------------------------------//
+
+    override val maxOffset: Int
+        get() = TODO("not implemented")
+
+    override fun getSourceRangeInfo(beginOffset: Int, endOffset: Int): SourceRangeInfo {
+        TODO("not implemented")
+    }
+}
+
+//-----------------------------------------------------------------------------//
+
+class IrFileImpl(entry: SourceManager.FileEntry) : IrFile {
+
+    override val fileEntry = entry
+
+    //-------------------------------------------------------------------------//
+
+    override val fileAnnotations: MutableList<AnnotationDescriptor>
+        get() = TODO("not implemented")
+    override val symbol: IrFileSymbol
+        get() = TODO("not implemented")
+    override val packageFragmentDescriptor: PackageFragmentDescriptor
+        get() = TODO("not implemented")
+    override val endOffset: Int
+        get() = TODO("not implemented")
+    override val startOffset: Int
+        get() = TODO("not implemented")
+    override val declarations: MutableList<IrDeclaration>
+        get() = TODO("not implemented")
+    override fun <D> acceptChildren(visitor: IrElementVisitor<Unit, D>, data: D) {
+        TODO("not implemented")
+    }
+    override fun <D> transformChildren(transformer: IrElementTransformer<D>, data: D) {
+        TODO("not implemented")
+    }
+    override fun <R, D> accept(visitor: IrElementVisitor<R, D>, data: D): R {
+        TODO("not implemented")
     }
 }
 

@@ -114,8 +114,6 @@ internal val RuntimeAware.kTypeInfo: LLVMTypeRef
     get() = runtime.typeInfoType
 internal val RuntimeAware.kObjHeader: LLVMTypeRef
     get() = runtime.objHeaderType
-internal val RuntimeAware.kContainerHeader: LLVMTypeRef
-    get() = runtime.containerHeaderType
 internal val RuntimeAware.kObjHeaderPtr: LLVMTypeRef
     get() = pointerType(kObjHeader)
 internal val RuntimeAware.kObjHeaderPtrPtr: LLVMTypeRef
@@ -128,6 +126,7 @@ internal val RuntimeAware.kTypeInfoPtr: LLVMTypeRef
     get() = pointerType(kTypeInfo)
 internal val kInt1         = LLVMInt1Type()!!
 internal val kBoolean      = kInt1
+internal val kInt64        = LLVMInt64Type()!!
 internal val kInt8Ptr      = pointerType(int8Type)
 internal val kInt8PtrPtr   = pointerType(kInt8Ptr)
 internal val kNullInt8Ptr  = LLVMConstNull(kInt8Ptr)!!
@@ -151,7 +150,7 @@ internal fun structType(types: List<LLVMTypeRef>): LLVMTypeRef =
 
 internal fun ContextUtils.numParameters(functionType: LLVMTypeRef) : Int {
     // Note that type is usually function pointer, so we have to dereference it.
-    return LLVMCountParamTypes(LLVMGetElementType(functionType))!!
+    return LLVMCountParamTypes(LLVMGetElementType(functionType))
 }
 
 internal fun ContextUtils.isObjectReturn(functionType: LLVMTypeRef) : Boolean {
@@ -182,12 +181,13 @@ internal fun getGlobalType(ptrToGlobal: LLVMValueRef): LLVMTypeRef {
     return LLVMGetElementType(ptrToGlobal.type)!!
 }
 
-internal fun ContextUtils.addGlobal(name: String, type: LLVMTypeRef,
+internal fun ContextUtils.addGlobal(name: String, type: LLVMTypeRef, isExported: Boolean,
                                     threadLocal: Boolean = false): LLVMValueRef {
-    assert(LLVMGetNamedGlobal(context.llvmModule, name) == null)
+    if (isExported)
+        assert(LLVMGetNamedGlobal(context.llvmModule, name) == null)
     val result = LLVMAddGlobal(context.llvmModule, type, name)!!
     if (threadLocal)
-        LLVMSetThreadLocalMode(result, LLVMThreadLocalMode.LLVMLocalExecTLSModel)
+        LLVMSetThreadLocalMode(result, runtime.tlsMode)
     return result
 }
 
@@ -198,12 +198,12 @@ internal fun ContextUtils.importGlobal(name: String, type: LLVMTypeRef,
         assert (getGlobalType(found) == type)
         assert (LLVMGetInitializer(found) == null)
         if (threadLocal)
-            assert(LLVMGetThreadLocalMode(found) == LLVMThreadLocalMode.LLVMLocalExecTLSModel)
+            assert(LLVMGetThreadLocalMode(found) == runtime.tlsMode)
         return found
     } else {
         val result = LLVMAddGlobal(context.llvmModule, type, name)!!
         if (threadLocal)
-            LLVMSetThreadLocalMode(result, LLVMThreadLocalMode.LLVMLocalExecTLSModel)
+            LLVMSetThreadLocalMode(result, runtime.tlsMode)
         return result
     }
 }
@@ -259,3 +259,5 @@ fun parseBitcodeFile(path: String): LLVMModuleRef = memScoped {
 
 internal fun String.mdString() = LLVMMDString(this, this.length)!!
 internal fun node(vararg it:LLVMValueRef) = LLVMMDNode(it.toList().toCValues(), it.size)
+
+internal fun LLVMValueRef.setUnaligned() = apply { LLVMSetAlignment(this, 1) }

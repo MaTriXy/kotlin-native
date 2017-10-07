@@ -36,30 +36,69 @@ object nativeHeap : NativeFreeablePlacement {
     override fun free(mem: NativePtr) = nativeMemUtils.free(mem)
 }
 
-// TODO: implement optimally
-class Arena(private val parent: NativeFreeablePlacement = nativeHeap) : NativePlacement {
+private typealias Deferred = () -> Unit
 
-    private val allocatedChunks = ArrayList<NativePointed>()
+open class DeferScope {
 
-    override fun alloc(size: Long, align: Int): NativePointed {
-        val res = parent.alloc(size, align)
-        try {
-            allocatedChunks.add(res)
-            return res
-        } catch (e: Throwable) {
-            parent.free(res)
-            throw e
+    @PublishedApi
+    internal var topDeferred: Deferred? = null
+
+    internal fun executeAllDeferred() {
+        topDeferred?.let {
+            it.invoke()
+            topDeferred = null
         }
     }
 
-    fun clear() {
-        allocatedChunks.forEach {
-            parent.free(it)
+    inline fun defer(crossinline block: () -> Unit) {
+        val currentTop = topDeferred
+        topDeferred = {
+            try {
+                block()
+            } finally {
+                // TODO: it is possible to implement chaining without recursion,
+                // but it would require using an anonymous object here
+                // which is not yet supported in Kotlin Native inliner.
+                currentTop?.invoke()
+            }
         }
+    }
+}
 
-        allocatedChunks.clear()
+abstract class AutofreeScope : DeferScope(), NativePlacement {
+    override abstract fun alloc(size: Long, align: Int): NativePointed
+}
+
+open class ArenaBase(private val parent: NativeFreeablePlacement = nativeHeap) : AutofreeScope() {
+
+    private var lastChunk: NativePointed? = null
+
+    final override fun alloc(size: Long, align: Int): NativePointed {
+        // Reserve space for a pointer:
+        val gapForPointer = maxOf(pointerSize, align)
+
+        val chunk = parent.alloc(size = gapForPointer + size, align = gapForPointer)
+        nativeMemUtils.putNativePtr(chunk, lastChunk.rawPtr)
+        lastChunk = chunk
+        return interpretOpaquePointed(chunk.rawPtr + gapForPointer.toLong())
     }
 
+    @PublishedApi
+    internal fun clearImpl() {
+        this.executeAllDeferred()
+
+        var chunk = lastChunk
+        while (chunk != null) {
+            val nextChunk = nativeMemUtils.getNativePtr(chunk)
+            parent.free(chunk)
+            chunk = interpretNullableOpaquePointed(nextChunk)
+        }
+    }
+
+}
+
+class Arena(parent: NativeFreeablePlacement = nativeHeap) : ArenaBase(parent) {
+    fun clear() = this.clearImpl()
 }
 
 /**
@@ -147,10 +186,11 @@ inline fun <reified T : CPointer<*>>
         NativePlacement.allocArrayOf(elements: List<T?>): CArrayPointer<CPointerVarOf<T>> {
 
     val res = allocArray<CPointerVarOf<T>>(elements.size)
-    elements.forEachIndexed { index, value ->
-        res[index] = value
+    var index = 0
+    while (index < elements.size) {
+        res[index] = elements[index]
+        ++index
     }
-
     return res
 }
 
@@ -163,8 +203,9 @@ fun NativePlacement.allocArrayOf(elements: ByteArray): CArrayPointer<ByteVar> {
 fun NativePlacement.allocArrayOf(vararg elements: Float): CArrayPointer<FloatVar> {
     val res = allocArray<FloatVar>(elements.size)
     var index = 0
-    for (element in elements) {
-        res[index++] = element
+    while (index < elements.size) {
+        res[index] = elements[index]
+        ++index
     }
     return res
 }
@@ -172,8 +213,8 @@ fun NativePlacement.allocArrayOf(vararg elements: Float): CArrayPointer<FloatVar
 fun <T : CPointed> NativePlacement.allocPointerTo() = alloc<CPointerVar<T>>()
 
 fun <T : CVariable> zeroValue(size: Int, align: Int): CValue<T> = object : CValue<T>() {
-    override fun getPointer(placement: NativePlacement): CPointer<T> {
-        val result = placement.alloc(size, align)
+    override fun getPointer(scope: AutofreeScope): CPointer<T> {
+        val result = scope.alloc(size, align)
         nativeMemUtils.zeroMemory(result, size)
         return interpretCPointer(result.rawPtr)!!
     }
@@ -195,7 +236,7 @@ fun <T : CVariable> CPointed.readValues(size: Int, align: Int): CValues<T> {
     nativeMemUtils.getByteArray(this, bytes, size)
 
     return object : CValues<T>() {
-        override fun getPointer(placement: NativePlacement): CPointer<T> = placement.placeBytes(bytes, align)
+        override fun getPointer(scope: AutofreeScope): CPointer<T> = scope.placeBytes(bytes, align)
         override val size get() = bytes.size
     }
 }
@@ -207,7 +248,7 @@ fun <T : CVariable> CPointed.readValue(size: Long, align: Int): CValue<T> {
     val bytes = ByteArray(size.toInt())
     nativeMemUtils.getByteArray(this, bytes, size.toInt())
     return object : CValue<T>() {
-        override fun getPointer(placement: NativePlacement): CPointer<T> = placement.placeBytes(bytes, align)
+        override fun getPointer(scope: AutofreeScope): CPointer<T> = scope.placeBytes(bytes, align)
         override val size get() = bytes.size
     }
 }
@@ -215,6 +256,21 @@ fun <T : CVariable> CPointed.readValue(size: Long, align: Int): CValue<T> {
 // Note: can't be declared as property due to possible clash with a struct field.
 // TODO: find better name.
 inline fun <reified T : CStructVar> T.readValue(): CValue<T> = this.readValue(sizeOf<T>(), alignOf<T>())
+
+fun CValue<*>.write(location: NativePtr) {
+    // TODO: probably CValue must be redesigned.
+    val fakeScope = object : AutofreeScope() {
+        var used = false
+        override fun alloc(size: Long, align: Int): NativePointed {
+            assert(!used)
+            used = true
+            return interpretPointed<ByteVar>(location)
+        }
+    }
+
+    this.getPointer(fakeScope)
+    assert(fakeScope.used)
+}
 
 // TODO: optimize
 fun <T : CVariable> CValues<T>.getBytes(): ByteArray = memScoped {
@@ -250,7 +306,7 @@ inline fun <reified T : CVariable> createValues(count: Int, initializer: T.(inde
 }
 
 fun cValuesOf(vararg elements: Byte): CValues<ByteVar> = object : CValues<ByteVar>() {
-    override fun getPointer(placement: NativePlacement) = placement.allocArrayOf(elements)
+    override fun getPointer(scope: AutofreeScope) = scope.allocArrayOf(elements)
     override val size get() = 1 * elements.size
 }
 
@@ -266,7 +322,7 @@ fun cValuesOf(vararg elements: Long): CValues<LongVar> =
         createValues(elements.size) { index -> this.value = elements[index] }
 
 fun cValuesOf(vararg elements: Float): CValues<FloatVar> = object : CValues<FloatVar>() {
-    override fun getPointer(placement: NativePlacement) = placement.allocArrayOf(*elements)
+    override fun getPointer(scope: AutofreeScope) = scope.allocArrayOf(*elements)
     override val size get() = 4 * elements.size
 }
 
@@ -287,8 +343,6 @@ fun <T : CPointed> Array<CPointer<T>?>.toCValues() = cValuesOf(*this)
 fun <T : CPointed> List<CPointer<T>?>.toCValues() = this.toTypedArray().toCValues()
 
 /**
- * TODO: should the name of the function reflect the encoding?
- *
  * @return the value of zero-terminated UTF-8-encoded C string constructed from given [kotlin.String].
  */
 val String.cstr: CValues<ByteVar>
@@ -298,10 +352,39 @@ val String.cstr: CValues<ByteVar>
         return object : CValues<ByteVar>() {
             override val size get() = bytes.size + 1
 
-            override fun getPointer(placement: NativePlacement): CPointer<ByteVar> {
-                val result = placement.allocArray<ByteVar>(bytes.size + 1)
+            override fun getPointer(scope: AutofreeScope): CPointer<ByteVar> {
+                val result = scope.allocArray<ByteVar>(bytes.size + 1)
                 nativeMemUtils.putByteArray(bytes, result.pointed, bytes.size)
                 result[bytes.size] = 0.toByte()
+                return result
+            }
+        }
+    }
+
+/**
+ * Convert this list of Kotlin strings to C array of C strings,
+ * allocating memory for the array and C strings with given [AutofreeScope].
+ */
+fun List<String>.toCStringArray(autofreeScope: AutofreeScope): CPointer<CPointerVar<ByteVar>> =
+        autofreeScope.allocArrayOf(this.map { it.cstr.getPointer(autofreeScope) })
+
+/**
+ * Convert this array of Kotlin strings to C array of C strings,
+ * allocating memory for the array and C strings with given [AutofreeScope].
+ */
+fun Array<String>.toCStringArray(autofreeScope: AutofreeScope): CPointer<CPointerVar<ByteVar>> =
+        autofreeScope.allocArrayOf(this.map { it.cstr.getPointer(autofreeScope) })
+
+val String.wcstr: CValues<ShortVar>
+    get() {
+        val chars = CharArray(this.length, { i -> this.get(i)})
+        return object : CValues<ShortVar>() {
+            override val size get() = 2 * (chars.size + 1)
+
+            override fun getPointer(scope: AutofreeScope): CPointer<ShortVar> {
+                val result = scope.allocArray<ShortVar>(chars.size + 1)
+                nativeMemUtils.putCharArray(chars, result.pointed, chars.size)
+                result[chars.size] = 0.toShort()
                 return result
             }
         }
@@ -325,17 +408,13 @@ fun CPointer<ByteVar>.toKString(): String {
     return decodeFromUtf8(bytes)
 }
 
-class MemScope : NativePlacement {
+class MemScope : ArenaBase() {
 
-    private val arena = Arena()
-
-    override fun alloc(size: Long, align: Int) = arena.alloc(size, align)
-
-    fun clear() = arena.clear()
-
-    val memScope: NativePlacement
+    val memScope: MemScope
         get() = this
 }
+
+// TODO: consider renaming `memScoped` because it now supports `defer`.
 
 /**
  * Runs given [block] providing allocation of memory
@@ -346,6 +425,12 @@ inline fun <R> memScoped(block: MemScope.()->R): R {
     try {
         return memScope.block()
     } finally {
-        memScope.clear()
+        memScope.clearImpl()
     }
+}
+
+fun COpaquePointer.readBytes(count: Int): ByteArray {
+    val result = ByteArray(count)
+    nativeMemUtils.getByteArray(this.reinterpret<ByteVar>().pointed, result, count)
+    return result
 }

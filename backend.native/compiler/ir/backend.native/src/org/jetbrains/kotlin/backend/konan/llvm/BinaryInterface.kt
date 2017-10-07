@@ -18,7 +18,10 @@ package org.jetbrains.kotlin.backend.konan.llvm
 
 import llvm.LLVMTypeRef
 import org.jetbrains.kotlin.backend.common.descriptors.allParameters
+import org.jetbrains.kotlin.backend.konan.descriptors.isAbstract
 import org.jetbrains.kotlin.backend.konan.descriptors.isUnit
+import org.jetbrains.kotlin.backend.konan.getObjCMethodInfo
+import org.jetbrains.kotlin.backend.konan.isExternalObjCClass
 import org.jetbrains.kotlin.backend.konan.isValueType
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns
 import org.jetbrains.kotlin.descriptors.*
@@ -66,6 +69,10 @@ internal tailrec fun DeclarationDescriptor.isExported(): Boolean {
         // Currently code generator can access the constructor of the singleton,
         // so ignore visibility of the constructor itself.
         return constructedClass.isExported()
+    }
+
+    if (this is PropertyAccessorDescriptor) {
+        return this.correspondingProperty.isExported()
     }
 
     if (this is DeclarationDescriptorWithVisibility && !this.visibility.isPublicAPI) {
@@ -148,8 +155,22 @@ private val FunctionDescriptor.signature: String
 
 // TODO: rename to indicate that it has signature included
 internal val FunctionDescriptor.functionName: String
-    get() = with(this.original) { // basic support for generics
-        "$name$signature"
+    get() {
+        with(this.original) { // basic support for generics
+            this.getObjCMethodInfo()?.let {
+                return buildString {
+                    if (extensionReceiverParameter != null) {
+                        append(TypeUtils.getClassDescriptor(extensionReceiverParameter!!.type)!!.name)
+                        append(".")
+                    }
+
+                    append("objc:")
+                    append(it.selector)
+                }
+            }
+
+            return "$name$signature"
+        }
     }
 
 internal val FunctionDescriptor.symbolName: String
@@ -228,3 +249,6 @@ internal val ClassDescriptor.objectInstanceFieldSymbolName: String
 
         return "kobjref:$fqNameSafe"
     }
+
+internal val ClassDescriptor.typeInfoHasVtableAttached: Boolean
+    get() = !this.isAbstract() && !this.isExternalObjCClass()

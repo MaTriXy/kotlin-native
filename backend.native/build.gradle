@@ -15,15 +15,15 @@
  */
 
 buildscript {
+   apply from: "$rootDir/gradle/kotlinGradlePlugin.gradle"
+
    repositories {
        mavenCentral()
    }
 
    dependencies {
-       classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
        classpath "com.google.protobuf:protobuf-gradle-plugin:0.8.0"
    }
-
 }
 
 String protobufVersion = '2.6.1'
@@ -52,21 +52,24 @@ allprojects {
 
 sourceSets {
     compiler {
-      proto.srcDir 'compiler/ir/backend.native/src/'
-      java {
-          srcDir 'compiler/ir/backend.native/src/'
-          srcDir 'build/renamed/source/proto/compiler/java'
-      }
-      kotlin.srcDir 'compiler/ir/backend.native/src/'
+        proto.srcDir 'compiler/ir/backend.native/src/'
+        java {
+            srcDir 'compiler/ir/backend.native/src/'
+            srcDir 'build/renamed/source/proto/compiler/java'
+        }
+        kotlin {
+            srcDir 'compiler/ir/backend.native/src/'
+        }
+        resources.srcDir 'compiler/ir/backend.native/resources/'
     }
     cli_bc {
-      java.srcDir 'cli.bc/src'
-      kotlin.srcDir 'cli.bc/src'
+        java.srcDir 'cli.bc/src'
+        kotlin.srcDir 'cli.bc/src'
     }
     bc_frontend {
-     java.srcDir 'bc.frontend/src'
-     kotlin.srcDir 'bc.frontend/src'
-   }
+        java.srcDir 'bc.frontend/src'
+        kotlin.srcDir 'bc.frontend/src'
+    }
 }
 
 compileCompilerKotlin {
@@ -91,77 +94,27 @@ task renamePackage(type: Copy) {
     outputs.files('build/renamed')
 }
 
-List<String> llvmLinkerOpts() {
-    // TODO: cannot use llvm-config because it can be inaccessible during project configuration
-    final List<String> libs = [
-            '-lLLVMX86Disassembler',
-            '-lLLVMX86AsmParser',
-            '-lLLVMX86CodeGen',
-            '-lLLVMSelectionDAG',
-            '-lLLVMAsmPrinter',
-            '-lLLVMX86Desc',
-            '-lLLVMMCDisassembler',
-            '-lLLVMX86Info',
-            '-lLLVMX86AsmPrinter',
-            '-lLLVMX86Utils',
-            '-lLLVMInterpreter',
-            '-lLLVMCodeGen',
-            '-lLLVMScalarOpts',
-            '-lLLVMInstCombine',
-            '-lLLVMInstrumentation',
-            '-lLLVMProfileData',
-            '-lLLVMTransformUtils',
-            '-lLLVMBitWriter',
-            '-lLLVMExecutionEngine',
-            '-lLLVMTarget',
-            '-lLLVMAnalysis',
-            '-lLLVMRuntimeDyld',
-            '-lLLVMObject',
-            '-lLLVMMCParser',
-            '-lLLVMBitReader',
-            '-lLLVMMC',
-            '-lLLVMCore',
-            '-lLLVMSupport',
-            '-lLLVMDebugInfoCodeView',
-            '-lLLVMLinker',
-            "-ldebugInfo"
-    ]
-
-    final List<String> res = ["-L$llvmDir/lib", "-L${project(':llvmDebugInfoC').buildDir}/libs/debugInfo/static"]
-
-    if (isLinux()) {
-        res.addAll(["-Wl,-Bstatic", "-Wl,--whole-archive"]
-                + libs
-                + ["-Wl,--no-whole-archive", "-Wl,-Bdynamic"])
-    } else {
-        res.addAll(libs)
+kotlinNativeInterop {
+    llvm {
+        dependsOn ":llvmDebugInfoC:debugInfoStaticLibrary"
+        defFile 'llvm.def'
+        compilerOpts "-fPIC", "-I$llvmDir/include", "-I${project(':llvmDebugInfoC').projectDir}/src/main/include"
+        linkerOpts "-L$llvmDir/lib", "-L${project(':llvmDebugInfoC').buildDir}/libs/debugInfo/static"
     }
 
-    return res
-}
+    hash { // TODO: copy-pasted from ':common:compileHash'
+        compilerOpts '-fPIC'
+        linkerOpts '-fPIC'
+        linker 'clang++'
+        linkOutputs ":common:${hostName}Hash"
 
+        headers fileTree('../common/src/hash/headers') {
+          include '**/*.h'
+          include '**/*.hpp'
+        }
 
-kotlinNativeInterop {
-   llvm {
-     dependsOn ":llvmDebugInfoC:debugInfoStaticLibrary"
-     defFile 'llvm.def'
-     compilerOpts "-fPIC", "-I$llvmDir/include", "-I${project(':llvmDebugInfoC').projectDir}/src/main/include"
-     linkerOpts llvmLinkerOpts()
-   }
-
-   hash { // TODO: copy-pasted from ':common:compileHash'
-     compilerOpts '-fPIC'
-     linkerOpts '-fPIC'
-     linker 'clang++'
-     linkOutputs ":common:${host}Hash"
-
-     headers fileTree('../common/src/hash/headers') {
-       include '**/*.h'
-       include '**/*.hpp'
-     }
-
-     pkg 'org.jetbrains.kotlin.backend.konan.hash'
-   }
+        pkg 'org.jetbrains.kotlin.backend.konan.hash'
+    }
 }
 
 
@@ -175,49 +128,58 @@ configurations {
 
 dependencies {
 
-   compilerCompile "com.google.protobuf:protobuf-java:${protobufVersion}"
+    compilerCompile "com.google.protobuf:protobuf-java:${protobufVersion}"
 
-   compilerCompile kotlinCompilerModule
-   compilerCompile kotlinNativeInterop['llvm'].configuration
-   compilerCompile kotlinNativeInterop['hash'].configuration
+    compilerCompile kotlinCompilerModule
+    compilerCompile kotlinNativeInterop['llvm'].configuration
+    compilerCompile kotlinNativeInterop['hash'].configuration
+    compilerCompile project(':shared')
 
-   cli_bcCompile "org.jetbrains.kotlin:kotlin-runtime:$kotlin_version"
-   cli_bcCompile sourceSets.compiler.output
+    cli_bcCompile "org.jetbrains.kotlin:kotlin-runtime:$kotlin_version"
+    cli_bcCompile project(':shared')
+    cli_bcCompile sourceSets.compiler.output
 
-   bc_frontendCompile kotlinCompilerModule
+    bc_frontendCompile kotlinCompilerModule
 
-   cli_bc sourceSets.cli_bc.output
+    cli_bc sourceSets.cli_bc.output
 }
 
 
-build.dependsOn 'compilerClasses','cli_bcClasses','bc_frontendClasses'
+classes.dependsOn 'compilerClasses','cli_bcClasses','bc_frontendClasses'
 
 
 // These are just a couple of aliases
-task stdlib(dependsOn: "${host}Stdlib") 
-task start(dependsOn: "${host}Start")
+task stdlib(dependsOn: "${hostName}Stdlib")
+task start(dependsOn: "${hostName}Start")
 
 // These files are built before the 'dist' is complete,
 // so we provide custom values for
 // -runtime, -properties, -library and -Djava.library.path
 
 targetList.each { target ->
+    def konanJvmArgs = ["-ea",
+    "-Dkonan.home=${project.parent.file('dist')}",
+    "-Djava.library.path=${project.buildDir}/nativelibs",
+    "-Dfile.encoding=UTF-8"]
+
+    def defaultArgs = ['-nopack', '-nostdlib', '-nodefaultlibs', '-ea' ]
+    if (target != "wasm32") defaultArgs += '-g'
+    def konanArgs = [*defaultArgs,
+                     '-target', target,
+                     '-runtime', project(':runtime').file("build/${target}/runtime.bc"),
+                     '-properties', rootProject.konanPropertiesFile.canonicalPath,
+                     *project.globalBuildArgs]
+
     task("${target}Stdlib", type: JavaExec) {
         main = 'org.jetbrains.kotlin.cli.bc.K2NativeKt'
         classpath = project.configurations.cli_bc
-        jvmArgs "-ea", 
-            "-Dkonan.home=${project.parent.file('dist')}",
-            "-Djava.library.path=${project.buildDir}/nativelibs"
-        args('-output', project(':runtime').file("build/${target}Stdlib"), 
-            '-nolink', '-nopack', '-nostdlib','-ea',
-            '-target', target,
-            '-runtime', project(':runtime').file("build/${target}/runtime.bc"),
-            '-properties', project(':backend.native').file('konan.properties'),
-        project(':runtime').file('src/main/kotlin'), 
-        project(':Interop:Runtime').file('src/main/kotlin'),
-        project(':Interop:Runtime').file('src/native/kotlin'),
-        *project.globalBuildArgs)
-
+        jvmArgs = konanJvmArgs
+        args = [*konanArgs,
+                '-output', project(':runtime').file("build/${target}Stdlib"),
+                '-produce', 'library', '-module_name', 'stdlib',
+                project(':Interop:Runtime').file('src/main/kotlin'),
+                project(':Interop:Runtime').file('src/native/kotlin'),
+                project(':runtime').file('src/main/kotlin')]
         inputs.dir(project(':runtime').file('src/main/kotlin'))
         inputs.dir(project(':Interop:Runtime').file('src/main/kotlin'))
         inputs.dir(project(':Interop:Runtime').file('src/native/kotlin'))
@@ -225,23 +187,15 @@ targetList.each { target ->
 
         dependsOn ":runtime:${target}Runtime"
     }
-}
 
-targetList.each { target ->
     task("${target}Start", type: JavaExec) {
         main = 'org.jetbrains.kotlin.cli.bc.K2NativeKt'
         classpath = project.configurations.cli_bc
-        jvmArgs "-ea", 
-            "-Dkonan.home=${project.parent.file('dist')}",
-            "-Djava.library.path=${project.buildDir}/nativelibs"
-        args('-output', project(':runtime').file("build/${target}Start"), 
-            '-nolink', '-nopack', '-nostdlib', '-ea',
-            '-target', target,
-            '-library', project(':runtime').file("build/${target}Stdlib"),
-            '-runtime', project(':runtime').file("build/${target}/runtime.bc"),
-            '-properties', project(':backend.native').file('konan.properties'),
-        project(':runtime').file('src/launcher/kotlin'), 
-        *project.globalBuildArgs)
+        jvmArgs = konanJvmArgs
+        args = [*konanArgs, '-produce', 'bitcode',
+                '-output', project(':runtime').file("build/${target}Start"),
+                '-library', project(':runtime').file("build/${target}Stdlib"),
+                project(':runtime').file('src/launcher/kotlin')]
 
         inputs.dir(project(':runtime').file('src/launcher/kotlin'))
         outputs.file(project(':runtime').file("build/${target}Start"))
@@ -256,13 +210,13 @@ task run {
     }
 }
 
-task jars(type: Jar) {
-    from 'build/classes/cli_bc', 
-         'build/classes/compiler', 
-         'build/classes/hashInteropStubs', 
-         'build/classes/llvmInteropStubs'
+jar {
+    from sourceSets.cli_bc.output,
+         sourceSets.compiler.output,
+         sourceSets.hashInteropStubs.output,
+         sourceSets.llvmInteropStubs.output
 
-    dependsOn 'build', ':runtime:hostRuntime', 'external_jars'
+    dependsOn ':runtime:hostRuntime', 'external_jars'
 }
 
 task external_jars(type: Copy) {
@@ -282,5 +236,3 @@ protobuf {
         artifact = "com.google.protobuf:protoc:${protobufVersion}"
     }
 }
-
-
