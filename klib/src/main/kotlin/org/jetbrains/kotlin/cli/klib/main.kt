@@ -133,17 +133,33 @@ class Library(val name: String, val requestedRepository: String?, val target: St
 val currentAbiVersion = 1
 
 fun libraryInRepo(repository: File, name: String): File {
-    val resolver = KonanLibrarySearchPathResolver(listOf(repository.absolutePath), null, null, skipCurrentDir = true)
+    val resolver = KonanLibrarySearchPathResolver(
+            repositories = listOf(repository.absolutePath),
+            targetManager = null,
+            distributionKlib = null,
+            localKonanDir = null,
+            skipCurrentDir = true
+    )
     return resolver.resolve(name)
 }
 
 fun libraryInCurrentDir(name: String): File {
-    val resolver = KonanLibrarySearchPathResolver(emptyList(), null, null)
+    val resolver = KonanLibrarySearchPathResolver(
+            repositories = emptyList(),
+            targetManager = null,
+            distributionKlib = null,
+            localKonanDir = null
+    )
     return resolver.resolve(name)
 }
 
 fun libraryInRepoOrCurrentDir(repository: File, name: String): File {
-    val resolver = KonanLibrarySearchPathResolver(listOf(repository.absolutePath), null, null)
+    val resolver = KonanLibrarySearchPathResolver(
+            repositories = listOf(repository.absolutePath),
+            targetManager = null,
+            distributionKlib = null,
+            localKonanDir = null
+    )
     return resolver.resolve(name)
 }
 
@@ -151,7 +167,7 @@ fun libraryInRepoOrCurrentDir(repository: File, name: String): File {
 fun main(args: Array<String>) {
     val command = Command(args)
 
-    val targetManager = TargetManager(command.options["target"]?.last())
+    val targetManager = TargetManager(command.options["-target"]?.last())
     val target = targetManager.targetName
 
     val repository = command.options["-repository"]?.last()

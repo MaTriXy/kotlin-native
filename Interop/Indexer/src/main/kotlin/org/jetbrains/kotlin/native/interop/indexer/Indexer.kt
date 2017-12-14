@@ -492,7 +492,11 @@ internal class NativeIndexImpl(val library: NativeLibrary) : NativeIndex() {
                 val pointeeIsConst =
                         (clang_isConstQualifiedType(clang_getCanonicalType(pointeeType)) != 0)
 
-                PointerType(convertType(pointeeType), pointeeIsConst = pointeeIsConst)
+                val convertedPointeeType = convertType(pointeeType)
+                PointerType(
+                        if (convertedPointeeType == UnsupportedType) VoidType else convertedPointeeType,
+                        pointeeIsConst = pointeeIsConst
+                )
             }
 
             CXType_ConstantArray -> {
@@ -520,7 +524,17 @@ internal class NativeIndexImpl(val library: NativeLibrary) : NativeIndex() {
                     CXCursorKind.CXCursor_ObjCInterfaceDecl ->
                         ObjCObjectPointer(getObjCClassAt(declaration), nullability, getProtocols(type))
 
-                    else -> TODO(declarationKind.toString())
+                    CXCursorKind.CXCursor_TypedefDecl ->
+                        // typedef to Objective-C class itself, e.g. `typedef NSObject Object;`,
+                        //   (as opposed to `typedef NSObject* Object;`).
+                        // Note: it is not yet represented as Kotlin `typealias`.
+                        ObjCObjectPointer(
+                                getObjCClassAt(getTypedefUnderlyingObjCClass(declaration)),
+                                nullability,
+                                getProtocols(type)
+                        )
+
+                    else -> TODO("${declarationKind.toString()} ${clang_getTypeSpelling(type).convertAndDispose()}")
                 }
             }
 
@@ -530,9 +544,25 @@ internal class NativeIndexImpl(val library: NativeLibrary) : NativeIndex() {
 
             CXType_ObjCSel -> PointerType(VoidType)
 
-            CXType_BlockPointer -> objCType { ObjCIdType(getNullability(type, typeAttributes), getProtocols(type)) }
+            CXType_BlockPointer -> objCType { convertBlockPointerType(type, typeAttributes) }
 
             else -> UnsupportedType
+        }
+    }
+
+    private tailrec fun getTypedefUnderlyingObjCClass(typedefDecl: CValue<CXCursor>): CValue<CXCursor> {
+        assert(typedefDecl.kind == CXCursorKind.CXCursor_TypedefDecl)
+        val underlyingType = clang_getTypedefDeclUnderlyingType(typedefDecl)
+        val underlyingTypeDecl = clang_getTypeDeclaration(underlyingType)
+
+        return when (underlyingTypeDecl.kind) {
+            CXCursorKind.CXCursor_TypedefDecl -> getTypedefUnderlyingObjCClass(underlyingTypeDecl)
+            CXCursorKind.CXCursor_ObjCInterfaceDecl -> underlyingTypeDecl
+            else -> TODO(
+                    """typedef = ${getCursorSpelling(typedefDecl)}
+                        |underlying decl kind = ${underlyingTypeDecl.kind}
+                        |underlying = ${clang_getTypeSpelling(underlyingType).convertAndDispose()}""".trimMargin()
+            )
         }
     }
 
@@ -560,16 +590,36 @@ internal class NativeIndexImpl(val library: NativeLibrary) : NativeIndex() {
         val kind = type.kind
         assert(kind == CXType_Unexposed || kind == CXType_FunctionProto)
 
-        return if (clang_isFunctionTypeVariadic(type) != 0) {
-            VoidType // make this function pointer opaque.
+        if (clang_isFunctionTypeVariadic(type) != 0) {
+            return VoidType // make this function pointer opaque.
         } else {
             val returnType = convertType(clang_getResultType(type))
             val numArgs = clang_getNumArgTypes(type)
             val paramTypes = (0..numArgs - 1).map {
                 convertType(clang_getArgType(type, it))
             }
-            FunctionType(paramTypes, returnType)
+
+            return if (returnType == UnsupportedType || paramTypes.any { it == UnsupportedType }) {
+                VoidType
+            } else {
+                FunctionType(paramTypes, returnType)
+            }
         }
+    }
+
+    private fun convertBlockPointerType(type: CValue<CXType>, typeAttributes: CValue<CXTypeAttributes>?): ObjCPointer {
+        val kind = type.kind
+        assert(kind == CXType_BlockPointer)
+
+        val pointee = clang_getPointeeType(type)
+        val nullability = getNullability(type, typeAttributes)
+
+        // TODO: also use nullability attributes of parameters and return value.
+
+        val functionType = convertFunctionType(pointee) as? FunctionType
+                ?: return ObjCIdType(nullability, protocols = emptyList())
+
+        return ObjCBlockPointer(nullability, functionType.parameterTypes, functionType.returnType)
     }
 
     private val TARGET_ATTRIBUTE = "__target__"

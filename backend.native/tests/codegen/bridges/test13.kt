@@ -1,3 +1,7 @@
+package codegen.bridges.test13
+
+import kotlin.test.*
+
 open class A<T> {
     open fun T.foo() {
         println(this.toString())
@@ -14,7 +18,7 @@ open class B: A<Int>() {
     }
 }
 
-fun main(args : Array<String>) {
+@Test fun runTest() {
     val b = B()
     val a = A<Int>()
     b.bar(42)

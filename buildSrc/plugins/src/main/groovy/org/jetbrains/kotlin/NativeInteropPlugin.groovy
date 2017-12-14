@@ -28,6 +28,7 @@ import org.gradle.api.tasks.JavaExec
 import org.gradle.api.tasks.SourceSet
 import org.gradle.api.tasks.TaskDependency
 import org.gradle.internal.reflect.Instantiator
+import org.jetbrains.kotlin.konan.target.*
 
 class NamedNativeInteropConfig implements Named {
 
@@ -145,16 +146,19 @@ class NamedNativeInteropConfig implements Named {
     }
 
     File getNativeLibsDir() {
-        return new File(project.buildDir, "nativelibs")
+        def target = new TargetManager(target).target.userName
+        return new File(project.buildDir, "nativelibs/$target")
     }
 
     File getGeneratedSrcDir() {
         return new File(project.buildDir, "nativeInteropStubs/$name/kotlin")
     }
 
-    NamedNativeInteropConfig(Project project, String name) {
+    NamedNativeInteropConfig(Project project, String name, String target = null, String flavor = 'jvm') {
         this.name = name
         this.project = project
+        this.target = target
+        this.flavor = flavor
 
         this.headers = []
         this.linkFiles = project.files()
@@ -254,6 +258,8 @@ class NamedNativeInteropConfig implements Named {
 class NativeInteropExtension extends AbstractNamedDomainObjectContainer<NamedNativeInteropConfig> {
 
     private final Project project
+    private String target = null
+    private String flavor = 'jvm'
 
     protected NativeInteropExtension(Project project) {
         super(NamedNativeInteropConfig, project.gradle.services.get(Instantiator))
@@ -262,7 +268,16 @@ class NativeInteropExtension extends AbstractNamedDomainObjectContainer<NamedNat
 
     @Override
     protected NamedNativeInteropConfig doCreate(String name) {
-        return new NamedNativeInteropConfig(project, name)
+        def config = new NamedNativeInteropConfig(project, name, target, flavor)
+        return config
+    }
+
+    public void target(String value) {
+        this.target = value
+    }
+
+    public void flavor(String value) {
+        this.flavor = value
     }
 }
 

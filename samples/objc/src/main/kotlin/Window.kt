@@ -1,5 +1,8 @@
-import objc.*
 import kotlinx.cinterop.*
+import platform.AppKit.*
+import platform.Foundation.*
+import platform.objc.*
+import platform.osx.*
 
 fun main(args: Array<String>) {
     autoreleasepool {

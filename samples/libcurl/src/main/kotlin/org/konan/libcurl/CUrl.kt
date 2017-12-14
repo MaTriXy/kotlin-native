@@ -1,6 +1,7 @@
 package org.konan.libcurl
 
 import kotlinx.cinterop.*
+import platform.posix.*
 import libcurl.*
 
 class CUrl(val url: String)  {
@@ -32,7 +33,7 @@ class CUrl(val url: String)  {
 
 fun CPointer<ByteVar>.toKString(length: Int): String {
     val bytes = this.readBytes(length)
-    return kotlin.text.fromUtf8Array(bytes, 0, bytes.size)
+    return bytes.stringFromUtf8()
 }
 
 fun header_callback(buffer: CPointer<ByteVar>?, size: size_t, nitems: size_t, userdata: COpaquePointer?): size_t {

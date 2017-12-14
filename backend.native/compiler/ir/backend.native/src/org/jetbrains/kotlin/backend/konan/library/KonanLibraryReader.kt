@@ -26,11 +26,15 @@ interface KonanLibraryReader {
     val bitcodePaths: List<String>
     val includedPaths: List<String>
     val linkerOpts: List<String>
-    val dependencies: List<String>
+    val unresolvedDependencies: List<String>
+    val dataFlowGraph: ByteArray?
     val escapeAnalysis: ByteArray?
+    val isDefaultLibrary: Boolean get() = false
     val isNeededForLink: Boolean get() = true
-    val isDefaultLink: Boolean get() = false
     val manifestProperties: Properties
+    val moduleHeaderData: ByteArray
+    fun packageMetadata(fqName: String): ByteArray
+    fun markPackageAccessed(fqName: String)
     fun moduleDescriptor(specifics: LanguageVersionSettings): ModuleDescriptor
 }
 

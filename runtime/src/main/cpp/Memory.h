@@ -115,6 +115,10 @@ struct ContainerHeader {
   }
 };
 
+inline bool isPermanent(const ContainerHeader* header) {
+  return (header->refCount_ & CONTAINER_TAG_MASK) == CONTAINER_TAG_PERMANENT;
+}
+
 struct ArrayHeader;
 
 // Header of every object.
@@ -152,6 +156,10 @@ struct ObjHeader {
   ArrayHeader* array() { return reinterpret_cast<ArrayHeader*>(this); }
   const ArrayHeader* array() const { return reinterpret_cast<const ArrayHeader*>(this); }
 };
+
+inline bool isPermanent(const ObjHeader* obj) {
+  return isPermanent(obj->container());
+}
 
 // Header of value type array objects. Keep layout in sync with that of object header.
 struct ArrayHeader {
@@ -331,6 +339,11 @@ void DeinitInstanceBody(const TypeInfo* typeInfo, void* body);
 OBJ_GETTER(InitInstance, ObjHeader** location, const TypeInfo* type_info,
            void (*ctor)(ObjHeader*));
 
+// Returns true iff the object has space reserved in its tail for special purposes.
+bool HasReservedObjectTail(ObjHeader* obj) RUNTIME_NOTHROW;
+// Returns the pointer to the reserved space, `HasReservedObjectTail(obj)` must be true.
+void* GetReservedObjectTail(ObjHeader* obj) RUNTIME_NOTHROW;
+
 //
 // Object reference management.
 //
@@ -362,9 +375,9 @@ void UpdateReturnRef(ObjHeader** returnSlot, const ObjHeader* object) RUNTIME_NO
 // Optimization: release all references in range.
 void ReleaseRefs(ObjHeader** start, int count) RUNTIME_NOTHROW;
 // Called on frame enter, if it has object slots.
-void EnterFrame(ObjHeader** start, int count) RUNTIME_NOTHROW;
+void EnterFrame(ObjHeader** start, int parameters, int count) RUNTIME_NOTHROW;
 // Called on frame leave, if it has object slots.
-void LeaveFrame(ObjHeader** start, int count) RUNTIME_NOTHROW;
+void LeaveFrame(ObjHeader** start, int parameters, int count) RUNTIME_NOTHROW;
 // Tries to use returnSlot's arena for allocation.
 ObjHeader** GetReturnSlotIfArena(ObjHeader** returnSlot, ObjHeader** localSlot) RUNTIME_NOTHROW;
 // Tries to use param's arena for allocation.
@@ -378,7 +391,7 @@ bool ClearSubgraphReferences(ObjHeader* root, bool checked) RUNTIME_NOTHROW;
 // Creates stable pointer out of the object.
 void* CreateStablePointer(ObjHeader* obj) RUNTIME_NOTHROW;
 // Disposes stable pointer to the object.
-void DisposeStablePointer(void* pointer) RUNTIME_NOTHROW;;
+void DisposeStablePointer(void* pointer) RUNTIME_NOTHROW;
 // Translate stable pointer to object reference.
 OBJ_GETTER(DerefStablePointer, void*) RUNTIME_NOTHROW;
 // Move stable pointer ownership.

@@ -86,17 +86,31 @@ inline val ObjCObject?.rawPtr: NativePtr get() = if (this != null) {
     nativeNullPtr
 }
 
+@SymbolName("Kotlin_Interop_createKotlinObjectHolder")
+external fun createKotlinObjectHolder(any: Any?): NativePtr
+
+inline fun <reified T : Any> unwrapKotlinObjectHolder(holder: ObjCObject?): T {
+    return unwrapKotlinObjectHolderImpl(holder!!.rawPtr) as T
+}
+
+@PublishedApi
+@SymbolName("Kotlin_Interop_unwrapKotlinObjectHolder")
+external internal fun unwrapKotlinObjectHolderImpl(ptr: NativePtr): Any
+
 class ObjCObjectVar<T : ObjCObject?>(rawPtr: NativePtr) : CVariable(rawPtr) {
     companion object : CVariable.Type(pointerSize.toLong(), pointerSize)
 }
 
-class ObjCStringVarOf<T : String?>(rawPtr: NativePtr) : CVariable(rawPtr) {
+class ObjCNotImplementedVar<T : Any?>(rawPtr: NativePtr) : CVariable(rawPtr) {
     companion object : CVariable.Type(pointerSize.toLong(), pointerSize)
 }
 
-var <T : String?> ObjCStringVarOf<T>.value: T
+var <T : Any?> ObjCNotImplementedVar<T>.value: T
     get() = TODO()
     set(value) = TODO()
+
+typealias ObjCStringVarOf<T> = ObjCNotImplementedVar<T>
+typealias ObjCBlockVar<T> = ObjCNotImplementedVar<T>
 
 @konan.internal.Intrinsic external fun getReceiverOrSuper(receiver: NativePtr, superClass: NativePtr): COpaquePointer?
 
@@ -123,6 +137,19 @@ annotation class InteropStubs()
 @Target(AnnotationTarget.FUNCTION)
 @Retention(AnnotationRetention.SOURCE)
 private annotation class ObjCMethodImp(val selector: String, val encoding: String)
+
+@konan.internal.ExportForCppRuntime("Kotlin_Interop_getObjCClass")
+private fun getObjCClassByName(name: NativePtr): NativePtr {
+    val result = objc_lookUpClass(name)
+    if (result == nativeNullPtr) {
+        val className = interpretCPointer<ByteVar>(name)!!.toKString()
+        val message = """Objective-C class '$className' not found.
+            |Ensure that the containing framework or library was linked.""".trimMargin()
+
+        throw RuntimeException(message)
+    }
+    return result
+}
 
 @konan.internal.ExportForCompiler
 private fun <T : ObjCObject> allocObjCObject(clazz: NativePtr): T {
@@ -183,3 +210,6 @@ external fun objc_retain(ptr: NativePtr): NativePtr
 
 @SymbolName("Kotlin_objc_release")
 external fun objc_release(ptr: NativePtr)
+
+@SymbolName("Kotlin_objc_lookUpClass")
+external fun objc_lookUpClass(name: NativePtr): NativePtr

@@ -1,15 +1,7 @@
 apply plugin: 'konan'
 
-konanInterop {
-    objc {
-        target "macbook"
-    }
-}
-
+konan.targets = ['macbook']
 
 konanArtifacts {
-    Window {
-        useInterop 'objc'
-        target "macbook"
-    }
+    program('Window')
 }

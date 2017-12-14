@@ -141,7 +141,6 @@ internal class IrSerializer(val context: Context,
             block.origin == IrStatementOrigin.LAMBDA ||
             block.origin == IrStatementOrigin.ANONYMOUS_FUNCTION
         val proto = KonanIr.IrBlock.newBuilder()
-            .setIsTransparentScope(block.isTransparentScope)
             .setIsLambdaOrigin(isLambdaOrigin)
         block.statements.forEach {
             proto.addStatement(serializeStatement(it))
@@ -149,9 +148,17 @@ internal class IrSerializer(val context: Context,
         return proto.build()
     }
 
+    fun serializeComposite(composite: IrComposite): KonanIr.IrComposite {
+        val proto = KonanIr.IrComposite.newBuilder()
+        composite.statements.forEach {
+            proto.addStatement(serializeStatement(it))
+        }
+        return proto.build()
+    }
+
     fun serializeCatch(catch: IrCatch): KonanIr.IrCatch {
         val proto = KonanIr.IrCatch.newBuilder()
-           .setParameter(serializeDescriptor(catch.parameter))
+           .setCatchParameter(serializeDeclaration(catch.catchParameter))
            .setResult(serializeExpression(catch.result))
         return proto.build()
     }
@@ -223,6 +230,12 @@ internal class IrSerializer(val context: Context,
         return proto.build()
     }
 
+    fun serializeClassReference(expression: IrClassReference): KonanIr.IrClassReference {
+        val proto = KonanIr.IrClassReference.newBuilder()
+            .setClassDescriptor(serializeDescriptor(expression.symbol.descriptor))
+        return proto.build()
+    }
+
     fun serializeConst(value: IrConst<*>): KonanIr.IrConst {
         val proto = KonanIr.IrConst.newBuilder()
         when (value.kind) {
@@ -249,10 +262,23 @@ internal class IrSerializer(val context: Context,
         return proto.build()
     }
 
+    fun serializeDoWhile(expression: IrDoWhileLoop): KonanIr.IrDoWhile {
+        val proto = KonanIr.IrDoWhile.newBuilder()
+            .setLoop(serializeLoop(expression))
+
+        return proto.build()
+    }
+
     fun serializeEnumConstructorCall(call: IrEnumConstructorCall): KonanIr.IrEnumConstructorCall {
         val proto = KonanIr.IrEnumConstructorCall.newBuilder()
             .setDescriptor(serializeDescriptor(call.descriptor))
             .setMemberAccess(serializeMemberAccessCommon(call))
+        return proto.build()
+    }
+
+    fun serializeGetClass(expression: IrGetClass): KonanIr.IrGetClass {
+        val proto = KonanIr.IrGetClass.newBuilder()
+            .setArgument(serializeExpression(expression.argument))
         return proto.build()
     }
 
@@ -386,8 +412,8 @@ internal class IrSerializer(val context: Context,
         return proto.build()
     }
 
-    fun serializeWhile(expression: IrWhileLoop): KonanIr.IrWhile {
-        val proto = KonanIr.IrWhile.newBuilder()
+    fun serializeLoop(expression: IrLoop): KonanIr.Loop {
+        val proto = KonanIr.Loop.newBuilder()
             .setCondition(serializeExpression(expression.condition))
         val label = expression.label
         if (label != null) {
@@ -401,8 +427,15 @@ internal class IrSerializer(val context: Context,
         if (body != null) {
             proto.setBody(serializeExpression(body))
         }
-        return proto.build()
 
+        return proto.build()
+    }
+
+    fun serializeWhile(expression: IrWhileLoop): KonanIr.IrWhile {
+        val proto = KonanIr.IrWhile.newBuilder()
+            .setLoop(serializeLoop(expression))
+
+        return proto.build()
     }
 
     fun serializeBreak(expression: IrBreak): KonanIr.IrBreak {
@@ -442,13 +475,18 @@ internal class IrSerializer(val context: Context,
         when (expression) {
             is IrBlock       -> operationProto.setBlock(serializeBlock(expression))
             is IrBreak       -> operationProto.setBreak(serializeBreak(expression))
+            is IrClassReference
+                             -> operationProto.setClassReference(serializeClassReference(expression))
             is IrCall        -> operationProto.setCall(serializeCall(expression))
             is IrCallableReference
                              -> operationProto.setCallableReference(serializeCallableReference(expression))
+            is IrComposite   -> operationProto.setComposite(serializeComposite(expression))
             is IrConst<*>    -> operationProto.setConst(serializeConst(expression))
             is IrContinue    -> operationProto.setContinue(serializeContinue(expression))
             is IrDelegatingConstructorCall
                              -> operationProto.setDelegatingConstructorCall(serializeDelegatingConstructorCall(expression))
+            is IrDoWhileLoop -> operationProto.setDoWhile(serializeDoWhile(expression))
+            is IrGetClass    -> operationProto.setGetClass(serializeGetClass(expression))
             is IrGetField    -> operationProto.setGetField(serializeGetField(expression))
             is IrGetValue    -> operationProto.setGetValue(serializeGetValue(expression))
             is IrGetEnumValue    
@@ -708,8 +746,7 @@ internal class IrDeserializer(val context: Context,
     }
 
     fun deserializeCatch(proto: KonanIr.IrCatch, start: Int, end: Int): IrCatch {
-        val parameter = deserializeDescriptor(proto.getParameter()) as VariableDescriptor
-        val catchParameter = IrVariableImpl(start, end, IrDeclarationOrigin.CATCH_PARAMETER, parameter)
+        val catchParameter = deserializeDeclaration(proto.catchParameter) as IrVariable
         val result = deserializeExpression(proto.getResult())
 
         return IrCatchImpl(start, end, catchParameter, result)
@@ -750,7 +787,6 @@ internal class IrDeserializer(val context: Context,
 
         val block = IrBlockImpl(start, end, type, isLambdaOrigin, statements)
 
-        // TODO: Need to set isTransparentScope somehow
         return block
     }
 
@@ -766,6 +802,11 @@ internal class IrDeserializer(val context: Context,
         if (proto.hasExtensionReceiver()) {
             access.extensionReceiver = deserializeExpression(proto.extensionReceiver)
         }
+    }
+
+    fun deserializeClassReference(proto: KonanIr.IrClassReference, start: Int, end: Int, type: KotlinType): IrClassReference {
+        val descriptor = deserializeDescriptor(proto.classDescriptor) as ClassifierDescriptor
+        return IrClassReferenceImpl(start, end, type, descriptor)
     }
 
     fun deserializeCall(proto: KonanIr.IrCall, start: Int, end: Int, type: KotlinType): IrCall {
@@ -804,6 +845,15 @@ internal class IrDeserializer(val context: Context,
         return callable
     }
 
+    fun deserializeComposite(proto: KonanIr.IrComposite, start: Int, end: Int, type: KotlinType): IrComposite {
+        val statements = mutableListOf<IrStatement>()
+        val statementProtos = proto.getStatementList()
+        statementProtos.forEach {
+            statements.add(deserializeStatement(it) as IrStatement)
+        }
+        return IrCompositeImpl(start, end, type, null, statements)
+    }
+
     fun deserializeDelegatingConstructorCall(proto: KonanIr.IrDelegatingConstructorCall, start: Int, end: Int): IrDelegatingConstructorCall {
         val descriptor = deserializeDescriptor(proto.getDescriptor()) as ClassConstructorDescriptor
         val typeArgs = deserializeTypeMap(descriptor, proto.memberAccess.getTypeMap())
@@ -819,6 +869,11 @@ internal class IrDeserializer(val context: Context,
         val call = IrEnumConstructorCallImpl(start, end, descriptor)
         deserializeMemberAccessCommon(call, proto.memberAccess)
         return call
+    }
+
+    fun deserializeGetClass(proto: KonanIr.IrGetClass, start: Int, end: Int, type: KotlinType): IrGetClass {
+        val argument = deserializeExpression(proto.argument)
+        return IrGetClassImpl(start, end, type, argument)
     }
 
     fun deserializeGetField(proto: KonanIr.IrGetField, start: Int, end: Int): IrGetField {
@@ -954,22 +1009,34 @@ internal class IrDeserializer(val context: Context,
         return  IrWhenImpl(start, end, type, null, branches)
     }
 
-    fun deserializeWhile(proto: KonanIr.IrWhile, start: Int, end: Int, type: KotlinType): IrWhileLoop {
-        // we create the IrLoop before deserializing the body, so that 
-        // IrBreak statements have something to put into 'loop' field.
-        val loop = IrWhileLoopImpl(start, end, type, null)
-
+    fun deserializeLoop(proto: KonanIr.Loop, start: Int, end: Int, type: KotlinType, loop: IrLoopBase): IrLoopBase {
         val loopId = proto.getLoopId()
         loopIndex.getOrPut(loopId){loop}
 
-        val condition = deserializeExpression(proto.getCondition())
         val label = if (proto.hasLabel()) proto.getLabel() else null
         val body = if (proto.hasBody()) deserializeExpression(proto.getBody()) else null
+        val condition = deserializeExpression(proto.getCondition())
 
         loop.label = label
         loop.condition = condition
         loop.body = body
 
+        return loop
+    }
+
+    fun deserializeDoWhile(proto: KonanIr.IrDoWhile, start: Int, end: Int, type: KotlinType): IrDoWhileLoop {
+        // we create the loop before deserializing the body, so that 
+        // IrBreak statements have something to put into 'loop' field.
+        val loop = IrDoWhileLoopImpl(start, end, type, null)
+        deserializeLoop(proto.loop, start, end, type, loop)
+        return loop
+    }
+
+    fun deserializeWhile(proto: KonanIr.IrWhile, start: Int, end: Int, type: KotlinType): IrWhileLoop {
+        // we create the loop before deserializing the body, so that 
+        // IrBreak statements have something to put into 'loop' field.
+        val loop = IrWhileLoopImpl(start, end, type, null)
+        deserializeLoop(proto.loop, start, end, type, loop)
         return loop
     }
 
@@ -1024,18 +1091,26 @@ internal class IrDeserializer(val context: Context,
                 -> deserializeBlock(proto.block, start, end, type)
             BREAK
                 -> deserializeBreak(proto.getBreak(), start, end, type)
+            CLASS_REFERENCE
+                -> deserializeClassReference(proto.classReference, start, end, type)
             CALL
                 -> deserializeCall(proto.call, start, end, type)
             CALLABLE_REFERENCE
                 -> deserializeCallableReference(proto.callableReference, start, end, type)
+            COMPOSITE
+                -> deserializeComposite(proto.composite, start, end, type)
             CONST
                 -> deserializeConst(proto.const, start, end, type)
             CONTINUE
                 -> deserializeContinue(proto.getContinue(), start, end, type)
             DELEGATING_CONSTRUCTOR_CALL
                 -> deserializeDelegatingConstructorCall(proto.delegatingConstructorCall, start, end)
+            DO_WHILE
+                -> deserializeDoWhile(proto.doWhile, start, end, type)
             GET_ENUM_VALUE
                 -> deserializeGetEnumValue(proto.getEnumValue, start, end)
+            GET_CLASS
+                -> deserializeGetClass(proto.getClass, start, end, type)
             GET_FIELD
                 -> deserializeGetField(proto.getField, start, end)
             GET_OBJECT

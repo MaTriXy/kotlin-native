@@ -33,7 +33,7 @@ repositories {
 
 dependencies {
     cli_bc project(path: ':backend.native', configuration: 'cli_bc')
-    update_tests (group: 'org',  name: 'bt345', version: testDataVersion) {
+    update_tests (group: 'org',  name: 'Kotlin_120_Compiler', version: testDataVersion) {
         artifact {
             name = 'internal/kotlin-test-data'
             type = 'zip'
@@ -60,6 +60,36 @@ allprojects {
             output.dir(rootProject.file("$testOutputRoot/external"))
         }
     }
+}
+
+def konanHome = rootProject.file(project.findProperty("konan.home") ?: distDir).absolutePath
+def suffix = isWindows() ? ".bat" : ""
+
+// TODO: Ideally we want to write just konanArtifacts{} clause here,
+// but we need to make Kotlin/Native Gradle Plugin a dependence
+// of our buildScripts first.
+task compileKonanTestLibrary(type: Exec) {
+    if (!project.hasProperty("konan.home")) {
+        dependsOn ':dist'
+    }
+
+    def compiler = "$konanHome/bin/konanc$suffix"
+    def source = 'testLibrary'
+    def artifact = 'build/konan/bin/testLibrary'
+
+    executable compiler
+    args source, '-o', artifact, '-p', 'library'
+}
+
+task installTestLibrary(type: Exec) {
+    dependsOn 'compileKonanTestLibrary'
+
+    def tool = "$konanHome/bin/klib$suffix"
+    def repo = "$konanHome/klib/common"
+    def library = 'build/konan/bin/testLibrary.klib'
+
+    executable tool
+    args 'install', library, '-repository', repo
 }
 
 // TODO: use lastSuccessful teamcity build.
@@ -108,19 +138,43 @@ task run() {
         dependsOn(tasks.withType(KonanTest).matching { !(it instanceof RunExternalTestGroup) && it.enabled })
 }
 
+// Collect results in one json.
+task resultsTask() {
+    doLast {
+        Map<String, Map<String, RunExternalTestGroup.TestResult>> results = [:]
+        def statistics = new RunExternalTestGroup.Statistics()
+        tasks.withType(RunExternalTestGroup).matching { it.state.executed }.each {
+            results.put(it.name, it.results)
+            statistics.add(it.statistics)
+        }
+
+        def output = ["statistics": statistics, "tests": results]
+        def json = JsonOutput.toJson(output)
+        def reportFile = new File(sourceSets.testOutputExternal.output.getDirs().getSingleFile(), "results.json")
+        reportFile.write(JsonOutput.prettyPrint(json))
+        println("DONE.\n\n" +
+                "TOTAL: $statistics.total\n" +
+                "PASSED: $statistics.passed\n" +
+                "FAILED: $statistics.failed\n" +
+                "ERROR: $statistics.error\n" +
+                "SKIPPED: $statistics.skipped")
+    }
+}
+
 Set<RunExternalTestGroup> createExternalTests(File testRoot, Closure taskConfiguration) {
     def result = new HashSet<RunExternalTestGroup>()
     testRoot.eachDirRecurse {
         // Skip build directory and directories without *.kt files.
-        if (it.name == "build" || it.listFiles().count {it.name.endsWith(".kt") && it.isFile()} == 0) {
+        if (it.name == "build" || it.listFiles().count { it.name.endsWith(".kt") && it.isFile() } == 0) {
             return
         }
 
         def taskDirectory = project.relativePath(it)
-        def taskName = taskDirectory.replaceAll("[-/]", '_')
+        def taskName = taskDirectory.replaceAll("[-/\\\\]", '_')
 
-        def task = (RunExternalTestGroup)project.task("$taskName", type: RunExternalTestGroup){
+        def task = (RunExternalTestGroup) project.task("$taskName", type: RunExternalTestGroup) {
             groupDirectory = "$taskDirectory"
+            finalizedBy resultsTask
         }
         taskConfiguration(task)
         result.add(task)
@@ -147,27 +201,6 @@ task run_external () {
         testTasks = testTasks.matching { it.name.startsWith(prefix) }
     }
     dependsOn(testTasks)
-
-    // Collect results in one json.
-    doLast {
-        Map<String, Map<String, RunExternalTestGroup.TestResult>> results = [:]
-        def statistics = new RunExternalTestGroup.Statistics()
-        testTasks.matching { it.state.executed }.each {
-            results.put(it.name, it.results)
-            statistics.add(it.statistics)
-        }
-
-        def output = ["statistics" : statistics, "tests" : results]
-        def json = JsonOutput.toJson(output)
-        def reportFile = new File(sourceSets.testOutputExternal.output.getDirs().getSingleFile(), "results.json")
-        reportFile.write(JsonOutput.prettyPrint(json))
-        println("DONE.\n\n" +
-                "TOTAL: $statistics.total\n" +
-                "PASSED: $statistics.passed\n" +
-                "FAILED: $statistics.failed\n" +
-                "ERROR: $statistics.error\n" +
-                "SKIPPED: $statistics.skipped")
-    }
 }
 
 task daily() {
@@ -250,6 +283,18 @@ task sum1(type: RunKonanTest) {
 
 task sum2(type: RunKonanTest) {
     source = "codegen/function/sum_imm.kt"
+}
+
+task sum_func(type: RunKonanTest) {
+    source = "codegen/function/sum_func.kt"
+}
+
+task sum_mixed(type: RunKonanTest) {
+    source = "codegen/function/sum_mixed.kt"
+}
+
+task sum_illy(type: RunKonanTest) {
+    source = "codegen/function/sum_silly.kt"
 }
 
 task function_defaults(type: RunKonanTest) {
@@ -358,6 +403,13 @@ task codegen_controlflow_for_loops_coroutines(type: RunKonanTest) {
             "Got: 0 2 4 6\n"
 }
 
+task codegen_controlflow_for_loops_let_with_nullable(type: RunKonanTest) {
+    source = "codegen/controlflow/for_loops_let_with_nullable.kt"
+    goldValue = "012345\n012345\n024\n01234\n01234\n024\n543210\n543210\n531\n" +
+                "012345\n012345\n024\n01234\n01234\n024\n543210\n543210\n531\n" +
+                "abcdef\nabcdef\nace\nabcde\nabcde\nace\nfedcba\nfedcba\nfdb\n"
+}
+
 task codegen_controlflow_for_loops_call_order(type: RunKonanTest) {
     source = "codegen/controlflow/for_loops_call_order.kt"
     goldValue = "1234\n1234\n2134\n"
@@ -407,7 +459,7 @@ task array_to_any(type: RunKonanTest) {
     source = "codegen/basics/array_to_any.kt"
 }
 
-task runtime_basic_exit(type: RunKonanTest) {
+task runtime_basic_exit(type: RunStandaloneKonanTest) {
     source = "runtime/basic/exit.kt"
     expectedExitStatus = 42
 }
@@ -417,13 +469,13 @@ task hello0(type: RunKonanTest) {
     source = "runtime/basic/hello0.kt"
 }
 
-task hello1(type: RunKonanTest) {
+task hello1(type: RunStandaloneKonanTest) {
     goldValue = "Hello World\n"
     testData = "Hello World\n"
     source = "runtime/basic/hello1.kt"
 }
 
-task hello2(type: RunKonanTest) {
+task hello2(type: RunStandaloneKonanTest) {
     goldValue = "you entered 'Hello World\n'"
     testData = "Hello World\n"
     source = "runtime/basic/hello2.kt"
@@ -439,13 +491,13 @@ task hello4(type: RunKonanTest) {
     source = "runtime/basic/hello4.kt"
 }
 
-task entry0(type: RunKonanTest) {
+task entry0(type: RunStandaloneKonanTest) {
     goldValue = "Hello.\n"
     source = "runtime/basic/entry0.kt"
-    flags = ["-entry", "koko.lala.main"] 
+    flags = ["-entry", "runtime.basic.entry0.main"]
 }
 
-task entry1(type: RunKonanTest) {
+task entry1(type: RunStandaloneKonanTest) {
     goldValue = "Hello.\n"
     source = "runtime/basic/entry1.kt"
     flags = ["-entry", "foo"] 
@@ -512,6 +564,30 @@ task worker3(type: RunKonanTest) {
     source = "runtime/workers/worker3.kt"
 }
 
+task worker4(type: RunKonanTest) {
+    disabled = (project.testTarget == 'wasm32') // Workers need pthreads.
+    goldValue = "Got 42\nOK\n"
+    source = "runtime/workers/worker4.kt"
+}
+
+task worker5(type: RunKonanTest) {
+    disabled = (project.testTarget == 'wasm32') // Workers need pthreads.
+    goldValue = "Got 3\nOK\n"
+    source = "runtime/workers/worker5.kt"
+}
+
+task worker6(type: RunKonanTest) {
+    disabled = (project.testTarget == 'wasm32') // Workers need pthreads.
+    goldValue = "Got 42\nOK\n"
+    source = "runtime/workers/worker6.kt"
+}
+
+task worker7(type: RunKonanTest) {
+    disabled = (project.testTarget == 'wasm32') // Workers need pthreads.
+    goldValue = "Input\nGot kotlin.Unit\nOK\n"
+    source = "runtime/workers/worker7.kt"
+}
+
 task superFunCall(type: RunKonanTest) {
     goldValue = "<fun:C><fun:C1>\n<fun:C><fun:C3>\n"
     source = "codegen/basics/superFunCall.kt"
@@ -576,6 +652,11 @@ task enum_linkTest(type: LinkKonanTest) {
     goldValue = "42\n117\n-1\n"
     source = "codegen/enum/linkTest_main.kt"
     lib = "codegen/enum/linkTest_lib.kt"
+}
+
+task enum_varargParam(type: RunKonanTest) {
+    goldValue = "3\n"
+    source = "codegen/enum/varargParam.kt"
 }
 
 task mangling(type: LinkKonanTest) {
@@ -807,6 +888,11 @@ task bridges_linkTest(type: LinkKonanTest) {
     goldValue = "42\n42\n42\n"
     source = "codegen/bridges/linkTest_main.kt"
     lib = "codegen/bridges/linkTest_lib.kt"
+}
+
+task bridges_special(type: RunKonanTest) {
+    goldValue = "Ok\n"
+    source = "codegen/bridges/special.kt"
 }
 
 task classDelegation_method(type: RunKonanTest) {
@@ -1173,6 +1259,10 @@ task cycle_do(type: RunKonanTest) {
     source = "codegen/cycles/cycle_do.kt"
 }
 
+task cycle_for(type: RunKonanTest) {
+    source = "codegen/cycles/cycle_for.kt"
+}
+
 task abstract_super(type: RunKonanTest) {
     source = "datagen/rtti/abstract_super.kt"
 }
@@ -1212,7 +1302,7 @@ task link(type: LinkKonanTest) {
     goldValue = "0\n"
     source = "link/src/bar.kt"
     lib = "link/lib"
-}
+}(
 */
 
 task link_omit_unused(type: LinkKonanTest) {
@@ -1221,10 +1311,29 @@ task link_omit_unused(type: LinkKonanTest) {
     lib = "link/omit/lib.kt"
 }
 
-task link_default_libs(type: RunKonanTest) {
+task link_default_libs(type: RunStandaloneKonanTest) {
     disabled = (project.testTarget == 'wasm32') // there will be no posix.klib for wasm
     goldValue = "sizet = 0\n"
     source = "link/default/default.kt"
+}
+
+task link_testLib_explicitly(type: RunStandaloneKonanTest) {
+    // there are no testLibrary for cross targets yet.
+    disabled = (project.testTarget != null && project.testTarget != project.hostName) 
+
+    dependsOn 'installTestLibrary'
+    goldValue = "This is a side effect of a test library linked into the binary.\nYou should not be seeing this.\n\nHello\n"
+    source = "link/omit/hello.kt"
+    // We force library inclusion, so need to see the warning banner.
+    flags = ['-l', 'testLibrary'] 
+
+}
+
+task no_purge_for_dependencies(type: LinkKonanTest) {
+    disabled = (project.testTarget == 'wasm32') // there will be no posix.klib for wasm
+    goldValue = "linked library\nand symbols from posix available: 17; 1.0\n"
+    source = "link/purge1/prog.kt"
+    lib = "link/purge1/lib.kt"
 }
 
 task for0(type: RunKonanTest) {
@@ -1350,7 +1459,6 @@ task hash_set0(type: RunKonanTest) {
 
 task listof0(type: RunKonanTest) {
     goldValue = "abc\n[a, b, c, d]\n[n, s, a]\n"
-    arguments = ["a"]
     source = "runtime/collections/listof0.kt"
 }
 
@@ -1410,6 +1518,13 @@ task chars0(type: RunKonanTest) {
     expectedFail = (project.testTarget == 'wasm32') // Uses exceptions.
     source = "runtime/text/chars0.kt"
     expectedExitStatus = 0
+}
+
+
+task utf8(type: RunKonanTest) {
+    expectedFail = (project.testTarget == 'wasm32') // Uses exceptions.
+    goldValue = "Hello\nПривет\n\uD800\uDC00\n\n\uFFFD\uFFFD\n\uFFFD12\n\uFFFD12\n12\uFFFD\n\uD83D\uDE25\n"
+    source = "runtime/text/utf8.kt"
 }
 
 task catch1(type: RunKonanTest) {
@@ -1567,7 +1682,7 @@ task range0(type: RunKonanTest) {
     source = "runtime/collections/range0.kt"
 }
 
-task args0(type: RunKonanTest) {
+task args0(type: RunStandaloneKonanTest) {
     arguments = ["AAA", "BB", "C"]
     goldValue = "AAA\nBB\nC\n"
     source = "runtime/basic/args0.kt"
@@ -1589,17 +1704,17 @@ task runtime_basic_standard(type: RunKonanTest) {
     source = "runtime/basic/standard.kt"
 }
 
-task runtime_basic_assert_failed(type: RunKonanTest) {
+task runtime_basic_assert_failed(type: RunStandaloneKonanTest) {
     expectedExitStatus = 1
     source = "runtime/basic/assert_failed.kt"
 }
 
-task runtime_basic_assert_passed(type: RunKonanTest) {
+task runtime_basic_assert_passed(type: RunStandaloneKonanTest) {
     expectedExitStatus = 0
     source = "runtime/basic/assert_passed.kt"
 }
 
-task runtime_basic_assert_disabled(type: RunKonanTest) {
+task runtime_basic_assert_disabled(type: RunStandaloneKonanTest) {
     expectedExitStatus = 0
     enableKonanAssertions = false
     source = "runtime/basic/assert_failed.kt"
@@ -1701,20 +1816,20 @@ task lambda13(type: RunKonanTest) {
 
 task objectExpression1(type: RunKonanTest) {
     goldValue = "aabb\n"
-    source = "codegen/objectExpression/1.kt"
+    source = "codegen/objectExpression/expr1.kt"
 }
 
 task objectExpression2(type: RunKonanTest) {
     goldValue = "a\n"
-    source = "codegen/objectExpression/2.kt"
+    source = "codegen/objectExpression/expr2.kt"
 }
 
 task objectExpression3(type: RunKonanTest) {
     goldValue = "\n1\n2\n"
-    source = "codegen/objectExpression/3.kt"
+    source = "codegen/objectExpression/expr3.kt"
 }
 
-task initializers2(type: RunKonanTest) {
+task initializers2(type: RunStandaloneKonanTest) {
     goldValue = "init globalValue2\n" +
                 "init globalValue3\n" +
                 "1\n" +
@@ -1767,9 +1882,22 @@ task memory_throw_cleanup(type: RunKonanTest) {
     source = "runtime/memory/throw_cleanup.kt"
 }
 
+task memory_escape0(type: RunKonanTest) {
+    source = "runtime/memory/escape0.kt"
+}
+
 task memory_escape1(type: RunKonanTest) {
     goldValue = "zzz\n"
     source = "runtime/memory/escape1.kt"
+}
+
+task memory_cycles0(type: RunKonanTest) {
+    goldValue = "42\n"
+    source = "runtime/memory/cycles0.kt"
+}
+
+task memory_basic0(type: RunKonanTest) {
+    source = "runtime/memory/basic0.kt"
 }
 
 task memory_escape2(type: RunKonanTest) {
@@ -1963,7 +2091,19 @@ task deserialized_members(type: LinkKonanTest) {
     source = "serialization/deserialize_members.kt"
 }
 
-task testing_annotations(type: RunKonanTest) {
+task serialized_catch(type: LinkKonanTest) {
+    source = "serialization/use.kt"
+    lib = "serialization/catch.kt"
+    goldValue = "Gotcha1: XXX\nGotcha2: YYY\n"
+}
+
+task serialized_doWhile(type: LinkKonanTest) {
+    source = "serialization/use.kt"
+    lib = "serialization/do_while.kt"
+    goldValue = "999\n"
+}
+
+task testing_annotations(type: RunStandaloneKonanTest) {
     source = "testing/annotations.kt"
     flags = ['-tr']
     arguments = ['--ktest_logger=SIMPLE']
@@ -1989,14 +2129,14 @@ task testing_annotations(type: RunKonanTest) {
             'Test suite finished: kotlin.test.tests.AnnotationsKt\nIteration finished: 1\nTesting finished\n'
 }
 
-task testing_assertions(type: RunKonanTest) {
+task testing_assertions(type: RunStandaloneKonanTest) {
     source = "testing/assertions.kt"
     flags = ['-tr']
     expectedFail = (project.testTarget == 'wasm32') // Uses exceptions.
     expectedExitStatus = 0
 }
 
-task testing_custom_main(type: RunKonanTest) {
+task testing_custom_main(type: RunStandaloneKonanTest) {
     source = "testing/custom_main.kt"
     flags = ['-tr', '-e', 'kotlin.test.tests.main']
     arguments = ['--ktest_logger=SIMPLE', '--ktest_repeat=2']
@@ -2022,12 +2162,12 @@ task testing_custom_main(type: RunKonanTest) {
 // Just check that the driver is able to produce runnable binaries.
 task driver0(type: RunDriverKonanTest) {
     goldValue = "Hello, world!\n"
-    source = "runtime/basic/hello0.kt"
+    source = "runtime/basic/driver0.kt"
 }
 
 task driver_opt(type: RunDriverKonanTest) {
     goldValue = "Hello, world!\n"
-    source = "runtime/basic/hello0.kt"
+    source = "runtime/basic/driver0.kt"
     flags = ["-opt"]
 }
 
@@ -2035,7 +2175,7 @@ task driver_opt(type: RunDriverKonanTest) {
 // binaries, but we verify that the compiler has been built, operational 
 // and accepts the -target flag, resulting in a successful compilation.
 task driver_cross(type: RunDriverKonanTest) {
-    source = "runtime/basic/hello0.kt"
+    source = "runtime/basic/driver0.kt"
     run = false
     if (isLinux()) {
         flags = ["-target", "raspberrypi"]
@@ -2052,55 +2192,44 @@ task inline_defaultArgs_linkTest(type: LinkKonanTest) {
 }
 
 kotlinNativeInterop {
+    target project.testTarget ?: 'host'
+    flavor 'native'
+
     sysstat {
         pkg 'sysstat'
         headers 'sys/stat.h'
-        flavor 'native'
     }
 
     cstdlib {
         pkg 'cstdlib'
         headers 'stdlib.h'
-        flavor 'native'
     }
 
     cstdio {
         defFile 'interop/basics/cstdio.def'
-        flavor 'native'
     }
 
     sockets {
         defFile 'interop/basics/sockets.def'
-        flavor 'native'
     }
 
     bitfields {
         defFile 'interop/basics/bitfields.def'
-        flavor 'native'
     }
 
     cglobals {
         defFile 'interop/basics/cglobals.def'
-        flavor 'native'
     }
 
     cfunptr {
         defFile 'interop/basics/cfunptr.def'
-        flavor 'native'
     }
 
     if (isMac()) {
-        opengl {
-            defFile '../../samples/opengl/src/main/c_interop/opengl.def'
-            linkerOpts '-framework', 'OpenGL', '-framework', 'GLUT'
-            flavor 'native'
-        }
-
         objcSmoke {
             defFile 'interop/objc/objcSmoke.def'
             headers "$projectDir/interop/objc/smoke.h"
             linkerOpts "-L$buildDir",  "-lobjcsmoke"
-            flavor 'native'
         }
     }
 }
@@ -2183,27 +2312,44 @@ task interop_echo_server(type: RunInteropKonanTest) {
 }
 
 if (isMac()) {
-    task interop_opengl_teapot(type: RunInteropKonanTest) {
+    task interop_opengl_teapot(type: RunStandaloneKonanTest) {
     disabled = (project.testTarget == 'wasm32') // No interop for wasm yet.
         run = false
         source = "interop/basics/opengl_teapot.kt"
-        interop = 'opengl'
     }
 
     task interop_objc_smoke(type: RunInteropKonanTest) {
         disabled = (project.testTarget == 'wasm32') // No interop for wasm yet.
-        goldValue = "Hello, World!\nKotlin says: Hello, everybody!\nHello from Kotlin\n2, 1\n" +
+        goldValue = "84\nFoo\nHello, World!\nKotlin says: Hello, everybody!\nHello from Kotlin\n2, 1\n" +
                 "true\ntrue\nDeallocated\nDeallocated\n"
 
         source = "interop/objc/smoke.kt"
         interop = 'objcSmoke'
 
         doFirst {
-            execClang {
+            execKonanClang(project.testTarget) {
                 args "$projectDir/interop/objc/smoke.m"
                 args "-lobjc", '-fobjc-arc'
                 args '-fPIC', '-shared', '-o', "$buildDir/libobjcsmoke.dylib"
             }
         }
     }
+}
+
+task buildKonanTests(type: BuildKonanTest) {
+    compileList = [ "codegen",  "datagen", "lower", "runtime", "serialization"]
+
+    // These tests should not be built into the TestRunner's test executable
+    excludeList = []
+    project.tasks.withType(KonanTest)
+            .matching { ! (it instanceof RunKonanTest) }
+            .each {
+                // add library and source files
+                if (it instanceof LinkKonanTest) {
+                    excludeList += it.lib
+                }
+                if (it.source != null) {
+                    excludeList += it.source
+                }
+            }
 }

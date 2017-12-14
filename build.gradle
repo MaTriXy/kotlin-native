@@ -26,9 +26,13 @@ ext {
     konanPropertiesFile = project(':backend.native').file('konan.properties')
     konanProperties = PropertiesKt.loadProperties(konanPropertiesFile.absolutePath)
 
-    dependenciesDir = rootProject.file("dist/dependencies")
+    distDir = file('dist')
+    dependenciesDir = DependencyProcessor.defaultDependenciesRoot
     clangManager = new ClangManager(konanProperties, dependenciesDir.absolutePath)
-    kotlinCompilerModule="org.jetbrains.kotlin:kotlin-compiler:${kotlinVersion}"
+    kotlinCompilerModule="org.jetbrains.kotlin:kotlin-compiler:${kotlinCompilerVersion}"
+    kotlinStdLibModule="org.jetbrains.kotlin:kotlin-stdlib:${kotlinStdLibVersion}"
+    kotlinReflectModule="org.jetbrains.kotlin:kotlin-reflect:${kotlinReflectVersion}"
+    kotlinScriptRuntimeModule="org.jetbrains.kotlin:kotlin-script-runtime:${kotlinScriptRuntimeVersion}"
 }
 
 allprojects {
@@ -112,12 +116,9 @@ void loadCommandLineProperties() {
     if (project.hasProperty("konanc_flags")) {
         throw new Error("Specify either -Ptest_flags or -Pbuild_flags.")
     }
-    ext.globalBuildArgs = project.hasProperty("build_flags")
-    ? ext.build_flags.split(' '): []
-    ext.globalTestArgs = project.hasProperty("test_flags")
-    ? ext.test_flags.split(' '): []
-    ext.testTarget = project.hasProperty("test_target")
-    ? ext.test_target: null
+    ext.globalBuildArgs = project.hasProperty("build_flags") ? ext.build_flags.split() : []
+    ext.globalTestArgs = project.hasProperty("test_flags") ? ext.test_flags.split() : []
+    ext.testTarget = project.hasProperty("test_target") ? ext.test_target : null
 }
 
 class PlatformInfo {
@@ -149,7 +150,7 @@ task distCompiler(type: Copy) {
     dependsOn ':klib:jar'
     dependsOn ':shared:jar'
 
-    destinationDir file('dist')
+    destinationDir distDir
 
     from(project(':backend.native').file('build/libs')) {
         into('konan/lib')
@@ -171,7 +172,7 @@ task distCompiler(type: Copy) {
         into('konan/lib')
     }
 
-    from(project(':backend.native').file('build/nativelibs')) {
+    from(project(':backend.native').file("build/nativelibs/$hostName")) {
         into('konan/nativelib')
     }
 
@@ -188,6 +189,10 @@ task distCompiler(type: Copy) {
     }
 
     from(project(':llvmDebugInfoC').file('src/scripts/konan_lldb.py')) {
+        into('tools')
+    }
+
+    from(project(':utilities').file('env_blacklist')) {
         into('tools')
     }
 
@@ -216,7 +221,7 @@ task distCompiler(type: Copy) {
 }
 
 task listDist(type: Exec) {
-    commandLine 'find', 'dist'
+    commandLine 'find', distDir
 }
 
 task distRuntime(type: Copy) {
@@ -224,13 +229,15 @@ task distRuntime(type: Copy) {
     dependsOn('commonDistRuntime')
 }
 
+def stdlib = 'klib/common/stdlib'
+
 task commonDistRuntime(type: Copy) {
-    destinationDir file('dist')
+    destinationDir distDir
 
     // Target independant common part.
     from(project(':runtime').file("build/${hostName}Stdlib")) {
         include('**')
-        into('klib/stdlib')
+        into(stdlib)
     }
 }
 
@@ -239,40 +246,52 @@ task crossDistRuntime(type: Copy) {
     dependsOn('commonDistRuntime')
 }
 
+task crossDistPlatformLibs {
+    dependsOn.addAll(targetList.collect { "${it}PlatformLibs" })
+}
+
 targetList.each { target ->
     task("${target}CrossDistRuntime", type: Copy) {
         dependsOn ":runtime:${target}Runtime"
         dependsOn ":backend.native:${target}Stdlib"
         dependsOn ":backend.native:${target}Start"
 
-        destinationDir file('dist')
+        destinationDir distDir
 
         from(project(':runtime').file("build/$target")) {
+            include("runtime.bc")
+            into("$stdlib/targets/$target/native")
+        }
+        from(project(':runtime').file("build/$target")) {
             include("*.bc")
-            into("klib/stdlib/targets/$target/native")
+            exclude("runtime.bc")
+            into("konan/targets/$target/native")
         }
         from(project(':runtime').file("build/${target}Stdlib")) {
             include('**')
-            into('klib/stdlib')
+            into(stdlib)
         }
         from(project(':runtime').file("build/${target}Start.bc")) {
             rename("${target}Start.bc", 'start.bc')
-            into("klib/stdlib/targets/$target/native")
+            into("konan/targets/$target/native")
         }
         if (target == 'wasm32') {
             from(project(':runtime').file('src/launcher/js')) {
-                into('klib/stdlib/targets/wasm32/included')
+                into("$stdlib/targets/wasm32/included")
             }
         }
     }
 
+    Task platformLibs = task("${target}PlatformLibs") {}
+
     targetDefFiles(target).forEach{
         defFile ->
             def taskName = defFileToTaskName(target, defFile.name)
+            def jvmArgs = project.findProperty("platfromLibsJvmArgs") ?: "-Xmx3G"
             def suffix = null
             if (new PlatformInfo().isWindows())
                 suffix = 'bat'
-            task(taskName, type:GradleBuild) {
+            Task libTask = task(taskName, type:GradleBuild) {
                 dependsOn ':dist'
                 dependsOn ':tools:kotlin-native-gradle-plugin:jar'
                 dependsOn defFile.config.depends.collect{defFileToTaskName(target, it)}
@@ -280,14 +299,17 @@ targetList.each { target ->
                 buildFile project('klib').file('platform.gradle')
                 dir project(':klib').projectDir
                 startParameter.projectProperties = [
-                        'kotlin_version' : kotlin_version,
+                        'konan.jvmArgs'  : jvmArgs,
+                        'konanVersion'   : konanVersion,
                         'name'           : defFile.name,
                         'defFile'        : defFile.file.absolutePath,
-                        'konan.home'     : project.file('dist'),
+                        'konan.home'     : distDir,
                         'target'         : target,
-                        'suffix'         : suffix
+                        'suffix'         : suffix,
+                        'libraries'      : defFile.config.depends.join(" ")
                 ]
             }
+            platformLibs.dependsOn(libTask)
     }
 }
 
@@ -298,6 +320,9 @@ private ArrayList<DefFile> targetDefFiles(String target) {
     project(':klib').file("src/platform/$platform")
             .listFiles()
             .findAll { it.name.endsWith(".def") }
+            // The libz.a/libz.so and zlib.h are missing in raspberrypi and mips sysroots.
+            // Just workaround it until we have sysroots corrected.
+            .findAll { ! ((target == 'raspberrypi' || target == 'linux_mips32' || target == 'linux_mipsel32') && it.name == 'zlib.def') }
             .collect { new DefFile(it, substitution) }
 }
 
@@ -314,8 +339,7 @@ private String defFileToTaskName(String target, String name) {
 }
 
 task distPlatformLibs {
-    def target = TargetManager.host.name().toLowerCase()
-    dependsOn  targetDefFiles(target).collect {defFileToTaskName(target, it.name)}
+    dependsOn targetDefFiles(hostName).collect {defFileToTaskName(hostName, it.name)}
 }
 
 task dist {
@@ -327,13 +351,14 @@ task crossDist {
 }
 
 task bundle(type: (isWindows()) ? Zip : Tar) {
-    dependsOn('distPlatformLibs') // TODO: handle cross target libs.
+    dependsOn('crossDistPlatformLibs')
     dependsOn('crossDist')
     def simpleOsName = TargetManager.simpleOsName()
     baseName = "kotlin-native-$simpleOsName-${project.konanVersion}"
     from("$project.rootDir/dist") {
         include '**'
         exclude 'dependencies'
+        exclude 'klib/testLibrary'
         into baseName
     }
     from(project.rootDir) {
@@ -348,6 +373,7 @@ task bundle(type: (isWindows()) ? Zip : Tar) {
         include 'INTEROP.md'
         include 'RELEASE_NOTES.md'
         include 'GRADLE_PLUGIN.md'
+        include 'PLATFORM_LIBS.md'
         exclude '**/gradle.properties'
         exclude '**/settings.gradle'
         exclude '**/build'
@@ -379,9 +405,7 @@ task performance(type: GradleBuild) {
 
 task clean {
     doLast {
-        file('dist').traverse(type: FileType.ANY, excludeNameFilter: "dependencies", maxDepth: 0) {
-            delete it
-        }
+        delete distDir
         delete bundle.outputs.files
     }
 }

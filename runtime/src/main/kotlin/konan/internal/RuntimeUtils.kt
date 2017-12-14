@@ -17,7 +17,6 @@
 package konan.internal
 
 import kotlin.internal.getProgressionLastElement
-import kotlin.text.toUtf8Array
 
 @ExportForCppRuntime
 fun ThrowNullPointerException(): Nothing {
@@ -62,6 +61,16 @@ fun ThrowUninitializedPropertyAccessException(): Nothing {
 }
 
 @ExportForCppRuntime
+internal fun ThrowNotImplementedError(): Nothing {
+    throw NotImplementedError("An operation is not implemented.")
+}
+
+@ExportForCppRuntime
+internal fun ThrowIllegalCharacterConversionException(): Nothing {
+    throw IllegalCharacterConversionException()
+}
+
+@ExportForCppRuntime
 fun PrintThrowable(throwable: Throwable) {
     println(throwable)
 }
@@ -100,6 +109,17 @@ fun <T: Enum<T>> valuesForEnum(values: Array<T>): Array<T>
     return result as Array<T>
 }
 
+@Intrinsic
+internal fun <T> createUninitializedInstance(): T {
+    throw Exception("Call to this function should've been lowered")
+}
+
+@Intrinsic
+@Suppress("UNUSED_PARAMETER")
+internal fun initInstance(thiz: Any, constructorCall: Any): Unit {
+    throw Exception("Call to this function should've been lowered")
+}
+
 fun checkProgressionStep(step: Int)  = if (step > 0) step else throw IllegalArgumentException("Step must be positive, was: $step.")
 fun checkProgressionStep(step: Long) = if (step > 0) step else throw IllegalArgumentException("Step must be positive, was: $step.")
 
@@ -124,5 +144,5 @@ fun KonanObjectToUtf8Array(value: Any?): ByteArray {
         is DoubleArray -> value.contentToString()
         else -> value.toString()
     }
-    return toUtf8Array(string, 0, string.length)
+    return string.toUtf8()
 }

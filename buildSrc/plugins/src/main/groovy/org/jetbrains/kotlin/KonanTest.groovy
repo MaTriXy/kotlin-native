@@ -17,12 +17,13 @@
 package org.jetbrains.kotlin
 
 import groovy.json.JsonOutput
-import org.gradle.api.DefaultTask
 import org.gradle.api.tasks.JavaExec
 import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecResult
 import org.jetbrains.kotlin.konan.target.*
 import org.jetbrains.kotlin.konan.properties.*
+
+import java.util.regex.Pattern
 
 abstract class KonanTest extends JavaExec {
     public String source
@@ -30,7 +31,7 @@ abstract class KonanTest extends JavaExec {
     def target = targetManager.target
     def backendNative = project.project(":backend.native")
     def runtimeProject = project.project(":runtime")
-    def dist = project.rootProject.file("dist")
+    def dist = project.rootProject.file(project.findProperty("konan.home") ?: "dist")
     def dependenciesDir = project.rootProject.dependenciesDir
     def konancDriver = project.isWindows() ? "konanc.bat" : "konanc"
     def konanc = new File("${dist.canonicalPath}/bin/$konancDriver").absolutePath
@@ -73,9 +74,10 @@ abstract class KonanTest extends JavaExec {
     }
 
     KonanTest(){
-        // TODO: that's a long reach up the project tree.
-        // May be we should reorganize a little.
-        dependsOn(project.rootProject.tasks['dist'])
+        // We don't build the compiler if a custom konan.home path is specified.
+        if (!project.hasProperty("konan.home")) {
+            dependsOn(project.rootProject.tasks['dist'])
+        }
     }
 
     @Override
@@ -91,12 +93,19 @@ abstract class KonanTest extends JavaExec {
         def log = new ByteArrayOutputStream()
         try {
             main = 'org.jetbrains.kotlin.cli.bc.K2NativeKt'
-            classpath = project.configurations.cli_bc
+            classpath = project.fileTree("$dist.canonicalPath/konan/lib/") {
+                include '*.jar'
+            }
             jvmArgs "-Dkonan.home=${dist.canonicalPath}",
                     "-Djava.library.path=${dist.canonicalPath}/konan/nativelib"
             enableAssertions = true
+            def sources = File.createTempFile(name,".lst")
+            sources.deleteOnExit()
+            def sourcesWriter = sources.newWriter()
+            filesToCompile.each {sourcesWriter << "$it\n"}
+            sourcesWriter.close()
             args = ["-output", output,
-                    *filesToCompile,
+                    "@${sources.absolutePath}",
                     *moreArgs,
                     *project.globalTestArgs]
             if (project.testTarget) {
@@ -246,7 +255,6 @@ fun handleExceptionContinuation(x: (Throwable) -> Unit): Continuation<Any?> = ob
 
         println(result)
 
-        
         def exitCodeMismatch = execResult.exitValue != expectedExitStatus
         if (exitCodeMismatch) {
             def message = "Expected exit status: $expectedExitStatus, actual: ${execResult.exitValue}"
@@ -255,17 +263,17 @@ fun handleExceptionContinuation(x: (Throwable) -> Unit): Continuation<Any?> = ob
             } else {
                 throw new TestFailedException("Test failed. $message")
             }
-        } 
-        
+        }
+
         def goldValueMismatch = goldValue != null && goldValue != result.replace(System.lineSeparator(), "\n")
         if (goldValueMismatch) {
             def message = "Expected output: $goldValue, actual output: $result"
             if (this.expectedFail) {
-                println("Expected failure. $message") 
+                println("Expected failure. $message")
             } else {
                 throw new TestFailedException("Test failed. $message")
             }
-        } 
+        }
 
         if (!exitCodeMismatch && !goldValueMismatch && this.expectedFail) println("Unexpected pass")
     }
@@ -295,7 +303,118 @@ class TestFailedException extends RuntimeException {
         super(s)
     }
 }
-class RunKonanTest extends KonanTest {
+
+abstract class ExtKonanTest extends KonanTest {
+
+    ExtKonanTest() {
+        super()
+    }
+
+    @Override
+    String buildExePath() {
+        // a single executable for all tests
+        return "$outputDirectory/program.tr"
+    }
+
+    // The same as its super() version but doesn't create a new dir for each test
+    @Override
+    void createOutputDirectory() {
+        if (outputDirectory != null) {
+            return
+        }
+
+        def outputSourceSet = project.sourceSets.findByName(getOutputSourceSetName())
+        if (outputSourceSet != null) {
+            outputDirectory = outputSourceSet.output.getDirs().getSingleFile().absolutePath
+            project.file(outputDirectory).mkdirs()
+        } else {
+            outputDirectory = getTemporaryDir().absolutePath
+        }
+    }
+}
+
+/**
+ * Builds tests with TestRunner enabled
+ */
+class BuildKonanTest extends ExtKonanTest {
+
+    public List<String> compileList
+    public List<String> excludeList
+
+    @Override
+    List<String> buildCompileList() {
+        assert compileList != null
+
+        // convert exclude list to paths
+        def excludeFiles = new ArrayList<String>()
+        excludeList.each { excludeFiles.add(project.file(it).absolutePath) }
+
+        // create list of tests to compile
+        def compileFiles = new ArrayList<String>()
+        compileList.each {
+            project.file(it).eachFileRecurse {
+                if (it.isFile() && it.name.endsWith(".kt") && !excludeFiles.contains(it.absolutePath)) {
+                    compileFiles.add(it.absolutePath)
+                }
+            }
+        }
+        compileFiles
+    }
+
+    @Override
+    void compileTest(List<String> filesToCompile, String exe) {
+        flags = flags ?: []
+        // compile with test runner enabled
+        flags.add("-tr")
+        runCompiler(filesToCompile, exe, flags)
+    }
+
+    @TaskAction
+    @Override
+    void executeTest() {
+        // only build tests
+        createOutputDirectory()
+        def program = buildExePath()
+        compileTest(buildCompileList(), program)
+    }
+}
+
+/**
+ * Runs test built with Konan's TestRunner
+ */
+class RunKonanTest extends ExtKonanTest {
+
+    RunKonanTest() {
+        super()
+        dependsOn('buildKonanTests')
+    }
+
+    @Override
+    void compileTest(List<String> filesToCompile, String exe) {
+        // tests should be already compiled
+    }
+
+    @TaskAction
+    @Override
+    void executeTest() {
+        arguments = arguments ?: []
+        // Print only test's output
+        arguments.add("--ktest_logger=SILENT")
+        arguments.add("--ktest_filter=" + convertToPattern(source))
+        super.executeTest()
+    }
+
+    private String convertToPattern(String source) {
+        return source.replace('/', '.')
+                .replace(".kt", "")
+                .concat(".*")
+    }
+}
+
+/**
+ * Compiles and executes test as a standalone binary
+ */
+class RunStandaloneKonanTest extends KonanTest {
     void compileTest(List<String> filesToCompile, String exe) {
         runCompiler(filesToCompile, exe, flags?:[])
     }
@@ -309,7 +428,10 @@ class RunDriverKonanTest extends KonanTest {
 
     RunDriverKonanTest() {
         super()
-        dependsOn(project.rootProject.tasks['cross_dist'])
+        // We don't build the compiler if a custom konan.home path is specified.
+        if (!project.hasProperty("konan.home")) {
+            dependsOn(project.rootProject.tasks['cross_dist'])
+        }
     }
 
     void compileTest(List<String> filesToCompile, String exe) {
@@ -378,7 +500,7 @@ class LinkKonanTest extends KonanTest {
     }
 }
 
-class RunExternalTestGroup extends RunKonanTest {
+class RunExternalTestGroup extends RunStandaloneKonanTest {
 
     def groupDirectory = "."
     def outputSourceSetName = "testOutputExternal"
@@ -440,25 +562,106 @@ class RunExternalTestGroup extends RunKonanTest {
         }
     }
 
+    @Override
     List<String> buildCompileList() {
-        def packagePattern = ~/(?m)^\s*package\s+([a-zA-z-][a-zA-Z0-9._-]*)/
+        // Already build by the previous step
+        return null
+    }
+
+    List<String> createTestFiles() {
+        def identifier = /[a-zA-Z_][a-zA-Z0-9_]/
+        def fullQualified = /[a-zA-Z_][a-zA-Z0-9_.]/
+        def importRegex = /(?m)^\s*import\s+/
+
+        def packagePattern = ~/(?m)^\s*package\s+(${fullQualified}*)/
         def boxPattern = ~/(?m)fun\s+box\s*\(\s*\)/
+        def classPattern = ~/.*(class|object|enum)\s+(${identifier}*).*/
+
+        def sourceName = "_" + normalize(project.file(source).name)
+        def packages = new LinkedHashSet()
         def imports = []
 
         def result = super.buildCompileList()
         for (String filePath : result) {
             def text = project.file(filePath).text
-            if (text =~ boxPattern && text =~ packagePattern){
-                def pkg = (text =~ packagePattern)[0][1]
-                imports.add("$pkg.*")
-                break
+            def pkg = null
+            if (text =~ packagePattern) {
+                pkg = (text =~ packagePattern)[0][1]
+                packages.add(pkg)
+                pkg = "$sourceName.$pkg"
+                text = text.replaceFirst(packagePattern, "package $pkg")
+            } else {
+                pkg = sourceName
+                text = "package $pkg\n" + text
             }
+            if (text =~ boxPattern) {
+                imports.add("${pkg}.*")
+            }
+            createFile(filePath, text)
+        }
+        // TODO: optimize files writes
+        for (String filePath : result) {
+            def text = project.file(filePath).text
+            // Find if there are any imports in the file
+            def matcher = (text =~ ~/${importRegex}(${fullQualified}*)/)
+            if (matcher) {
+                // Prepend package name to found imports
+                for (int i = 0; i < matcher.count; i++) {
+                    String importStatement = matcher[i][1]
+                    def subImport = importStatement.with {
+                        int dotIdx = indexOf('.')
+                        dotIdx > 0 ? substring(0, dotIdx) : it
+                    }
+                    if (packages.contains(subImport)) {
+                        // add only to those who import packages from the test files
+                        text = text.replaceFirst(~/${importRegex}${Pattern.quote(importStatement)}/,
+                                "import $sourceName.$importStatement")
+                    } else if (text =~ classPattern) {
+                        // special case for import from the local class
+                        def clsMatcher = (text =~ classPattern)
+                        for (int j = 0; j < clsMatcher.count; j++) {
+                            def cl = (text =~ classPattern)[j][2]
+                            if (subImport == cl) {
+                                text = text.replaceFirst(~/${importRegex}${Pattern.quote(importStatement)}/,
+                                        "import $sourceName.$importStatement")
+                            }
+                        }
+                    }
+                }
+            } else if (packages.empty) {
+                // Add import statement after package
+                def pkg = null
+                if (text =~ packagePattern) {
+                    pkg = 'package ' + (text =~ packagePattern)[0][1]
+                    text = text.replaceFirst(packagePattern, '')
+                }
+                text = (pkg ? "$pkg\n" : "") + "import $sourceName.*\n" + text
+            }
+            // now replace all package usages in full qualified names
+            def res = ""
+            text.eachLine {
+                def line = it
+                packages.each { String pkg ->
+                    if (line.contains("$pkg.") && ! (line =~ packagePattern || line =~ importRegex)) {
+                        def idx = line.indexOf("$pkg")
+                        if (! (idx > 0 && Character.isJavaIdentifierPart(line.charAt(idx - 1))) ) {
+                            line = line.substring(0, idx) + "$sourceName.$pkg" + line.substring(idx + pkg.length())
+                        }
+                    }
+                }
+                res += "$line\n"
+            }
+            createFile(filePath, res)
         }
         createLauncherFile("$outputDirectory/_launcher.kt", imports)
         result.add("$outputDirectory/_launcher.kt")
-        result.add(project.file("testUtils.kt"))
-        result.add(project.file("helpers.kt"))
         return result
+    }
+
+    String normalize(String name) {
+        name.replace('.kt', '')
+                .replace('-','_')
+                .replace('.', '_')
     }
 
     /**
@@ -466,13 +669,18 @@ class RunExternalTestGroup extends RunKonanTest {
      */
     void createLauncherFile(String file, List<String> imports) {
         StringBuilder text = new StringBuilder()
+        def pack = normalize(project.file(source).name)
+        text.append("package _$pack\n")
         for (v in imports) {
             text.append("import ").append(v).append('\n')
         }
 
         text.append(
 """
-fun main(args : Array<String>) {
+import kotlin.test.Test
+
+@Test
+fun runTest() {
     @Suppress("UNUSED_VARIABLE")
     val result = box()
     ${ (goldValue != null) ? "print(result)" : "" }
@@ -510,6 +718,23 @@ fun main(args : Array<String>) {
         }
     }
 
+    @Override
+    void compileTest(List<String> filesToCompile, String exe) {
+        // An executable should be already compiled
+    }
+
+    @Override
+    String buildExePath() {
+        def outputDir
+        def outputSourceSet = project.sourceSets.findByName(getOutputSourceSetName())
+        if (outputSourceSet != null) {
+            outputDir = outputSourceSet.output.getDirs().getSingleFile().absolutePath + "/$name"
+        } else {
+            outputDir = getTemporaryDir().absolutePath
+        }
+        return "$outputDir/program.tr"
+    }
+
     @TaskAction
     @Override
     void executeTest() {
@@ -517,12 +742,10 @@ fun main(args : Array<String>) {
         def outputRootDirectory = outputDirectory
 
         // Form the test list.
-        List<File> ktFiles = project.file(groupDirectory).listFiles(new FileFilter() {
-            @Override
-            boolean accept(File pathname) {
-                pathname.isFile() && pathname.name.endsWith(".kt")
-            }
-        })
+        List<File> ktFiles = project.file(groupDirectory)
+                .listFiles({
+                    it.isFile() && it.name.endsWith(".kt")
+                } as FileFilter)
         if (filter != null) {
             def pattern = ~filter
             ktFiles = ktFiles.findAll {
@@ -530,16 +753,42 @@ fun main(args : Array<String>) {
             }
         }
 
-        // Run the tests.
-        def currentResult = null
         statistics = new Statistics()
         def testSuite = createTestSuite(name, statistics)
         testSuite.start()
+        // Build tests in the group
+        flags = (flags ?: []) + "-tr"
+        def compileList = []
         ktFiles.each {
             source = project.relativePath(it)
-            // Create separate output directory for each test in the group.
-            outputDirectory = outputRootDirectory + "/${it.name}"
-            project.file(outputDirectory).mkdirs()
+            if (isEnabledForNativeBackend(source)) {
+                // Create separate output directory for each test in the group.
+                outputDirectory = outputRootDirectory + "/${it.name}"
+                project.file(outputDirectory).mkdirs()
+                compileList.addAll(createTestFiles())
+            }
+        }
+        compileList.add(project.file("testUtils.kt").absolutePath)
+        compileList.add(project.file("helpers.kt").absolutePath)
+        try {
+            runCompiler(compileList, buildExePath(), flags)
+        } catch (Exception ex) {
+            println("ERROR: Compilation failed for test suite: ${testSuite.name} with exception: ${ex}")
+            ktFiles.each {
+                def testCase = testSuite.createTestCase(it.name)
+                testCase.error(ex)
+            }
+            throw new RuntimeException("Compilation failed", ex)
+        }
+
+        // Run the tests.
+        def currentResult = null
+        outputDirectory = outputRootDirectory
+        arguments = (arguments ?: []) + "--ktest_logger=SILENT"
+        ktFiles.each {
+            source = project.relativePath(it)
+            def savedArgs = arguments
+            arguments += "--ktest_filter=_${normalize(it.name)}.*"
             println("TEST: $it.name (done: $statistics.total/${ktFiles.size()}, passed: $statistics.passed, skipped: $statistics.skipped)")
             def testCase = testSuite.createTestCase(it.name)
             testCase.start()
@@ -555,6 +804,7 @@ fun main(args : Array<String>) {
             } else {
                 currentResult = testCase.skip()
             }
+            arguments = savedArgs
             println("TEST $currentResult.status\n")
             if (currentResult.status == TestStatus.ERROR || currentResult.status == TestStatus.FAILED) {
                 println("Command to reproduce: ./gradlew $name -Pfilter=${it.name}\n")

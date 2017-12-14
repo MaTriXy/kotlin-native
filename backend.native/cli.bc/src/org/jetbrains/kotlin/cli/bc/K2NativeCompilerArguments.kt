@@ -75,7 +75,7 @@ class K2NativeCompilerArguments : CommonCompilerArguments() {
     @Argument(value = "-entry", shortName = "-e", valueDescription = "<name>", description = "Qualified entry point name")
     var mainPackage: String? = null
 
-    @Argument(value = "-produce", shortName = "-p", valueDescription = "{program|library|bitcode}", description = "Specify output file kind")
+    @Argument(value = "-produce", shortName = "-p", valueDescription = "{program|dynamic|framework|library|bitcode}", description = "Specify output file kind")
     var produce: String? = null
 
     @Argument(value = "-properties", valueDescription = "<path>", description = "Override standard 'konan.properties' location")
@@ -120,6 +120,9 @@ class K2NativeCompilerArguments : CommonCompilerArguments() {
 
     @Argument(value = "--print_locations", description = "Print locations")
     var printLocations: Boolean = false
+
+    @Argument(value = "--purge_user_libs", description = "Don't link unused libraries even explicitly specified")
+    var purgeUserLibs: Boolean = false
 
     @Argument(value = "--time", description = "Report execution time for compiler phases")
     var timePhases: Boolean = false

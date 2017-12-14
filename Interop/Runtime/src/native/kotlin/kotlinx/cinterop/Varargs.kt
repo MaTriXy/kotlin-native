@@ -1,3 +1,19 @@
+/*
+ * Copyright 2010-2017 JetBrains s.r.o.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package kotlinx.cinterop
 
 private const val MAX_ARGUMENT_SIZE = 8
@@ -95,10 +111,10 @@ inline fun <reified T  : CVariable> NativePlacement.allocFfiReturnValueBuffer(ty
 }
 
 fun callWithVarargs(codePtr: NativePtr, returnValuePtr: NativePtr, returnTypeKind: FfiTypeKind,
-                    fixedArguments: Array<out Any?>, variadicArguments: Array<out Any?>,
+                    fixedArguments: Array<out Any?>, variadicArguments: Array<out Any?>?,
                     argumentsPlacement: AutofreeScope) {
 
-    val totalArgumentsNumber = fixedArguments.size + variadicArguments.size
+    val totalArgumentsNumber = fixedArguments.size + if (variadicArguments == null) 0 else variadicArguments.size
 
     // All supported arguments take at most 8 bytes each:
     val argumentsStorage = argumentsPlacement.allocArray<LongVar>(totalArgumentsNumber)
@@ -122,17 +138,30 @@ fun callWithVarargs(codePtr: NativePtr, returnValuePtr: NativePtr, returnTypeKin
         addArgument(argument, isVariadic = false)
     }
 
-    for (argument in variadicArguments) {
-        addArgument(argument, isVariadic = true)
+    val variadicArgumentsNumber: Int
+
+    if (variadicArguments != null) {
+        for (argument in variadicArguments) {
+            addArgument(argument, isVariadic = true)
+        }
+        variadicArgumentsNumber = variadicArguments.size
+    } else {
+        variadicArgumentsNumber = -1
     }
 
     assert (index == totalArgumentsNumber)
 
-    callWithVarargs(codePtr, returnValuePtr, returnTypeKind, arguments.rawValue, types.rawValue,
-            fixedArguments.size, totalArgumentsNumber)
+    callFunctionPointer(codePtr, returnValuePtr, returnTypeKind, arguments.rawValue, types.rawValue,
+            totalArgumentsNumber, variadicArgumentsNumber)
 }
 
-@SymbolName("Kotlin_Interop_callWithVarargs")
-private external fun callWithVarargs(codePtr: NativePtr, returnValuePtr: NativePtr, returnTypeKind: FfiTypeKind,
-                                     arguments: NativePtr, argumentTypeKinds: NativePtr,
-                                     fixedArgumentsNumber: Int, totalArgumentsNumber: Int)
+@SymbolName("Kotlin_Interop_callFunctionPointer")
+private external fun callFunctionPointer(
+        codePtr: NativePtr,
+        returnValuePtr: NativePtr,
+        returnTypeKind: FfiTypeKind,
+        arguments: NativePtr,
+        argumentTypeKinds: NativePtr,
+        totalArgumentsNumber: Int,
+        variadicArgumentsNumber: Int
+)

@@ -64,7 +64,9 @@ class DependencyProcessor(dependenciesRoot: File,
                           homeDependencyCache: String = DEFAULT_HOME_DEPENDENCY_CACHE,
                           val airplaneMode: Boolean = false,
                           maxAttempts: Int = DependencyDownloader.DEFAULT_MAX_ATTEMPTS,
-                          attemptIntervalMs: Long = DependencyDownloader.DEFAULT_ATTEMPT_INTERVAL_MS) {
+                          attemptIntervalMs: Long = DependencyDownloader.DEFAULT_ATTEMPT_INTERVAL_MS,
+                          customProgressCallback: ProgressCallback? = null,
+                          val keepUnstable:Boolean = true) {
 
     val dependenciesDirectory = dependenciesRoot.apply { mkdirs() }
     val cacheDirectory = System.getProperty("user.home")?.let {
@@ -77,29 +79,33 @@ class DependencyProcessor(dependenciesRoot: File,
     private var isInfoShown = false
 
     // TOOO: Rename pause -> interval
-    private val downloader = DependencyDownloader(maxAttempts, attemptIntervalMs)
+    private val downloader = DependencyDownloader(maxAttempts, attemptIntervalMs, customProgressCallback)
     private val extractor = DependencyExtractor()
 
     private val archiveExtension get() = extractor.archiveExtension
 
     constructor(dependenciesRoot: File,
                 properties: KonanProperties,
-                dependenciesUrl: String = properties.dependenciesUrl) : this(
+                dependenciesUrl: String = properties.dependenciesUrl,
+                keepUnstable:Boolean = true) : this(
             dependenciesRoot,
             properties.properties,
             properties.dependencies,
-            dependenciesUrl)
+            dependenciesUrl,
+            keepUnstable = keepUnstable)
 
     constructor(dependenciesRoot: File,
                 properties: Properties,
                 dependencies: List<String>,
-                dependenciesUrl: String = properties.dependenciesUrl) : this(
+                dependenciesUrl: String = properties.dependenciesUrl,
+                keepUnstable:Boolean = true) : this(
             dependenciesRoot,
             dependenciesUrl,
             dependencies,
             airplaneMode = properties.airplaneMode,
             maxAttempts = properties.downloadingAttempts,
-            attemptIntervalMs = properties.downloadingAttemptIntervalMs)
+            attemptIntervalMs = properties.downloadingAttemptIntervalMs,
+            keepUnstable = keepUnstable)
 
 
     class DependencyFile(directory: File, fileName: String) {
@@ -108,7 +114,14 @@ class DependencyProcessor(dependenciesRoot: File,
 
         fun contains(dependency: String) = dependencies.contains(dependency)
         fun add(dependency: String) = dependencies.add(dependency)
-        fun addWithSave(dependency: String) {
+        fun remove(dependency: String) = dependencies.remove(dependency)
+
+        fun removeAndSave(dependency: String) {
+            remove(dependency)
+            save()
+        }
+
+        fun addAndSave(dependency: String) {
             add(dependency)
             save()
         }
@@ -128,21 +141,30 @@ class DependencyProcessor(dependenciesRoot: File,
         val depDir = File(dependenciesDirectory, dependency)
         val depName = depDir.name
 
+        val fileName = "$depName.$archiveExtension"
+        val archive = cacheDirectory.resolve(fileName)
+        val url = URL("$dependenciesUrl/$fileName")
+
         val extractedDependencies = DependencyFile(dependenciesDirectory, ".extracted")
         if (extractedDependencies.contains(depName) &&
-                depDir.exists() &&
-                depDir.isDirectory &&
-                depDir.list().isNotEmpty()) {
-            return
+            depDir.exists() &&
+            depDir.isDirectory &&
+            depDir.list().isNotEmpty()) {
+
+            if (!keepUnstable && depDir.list().contains(".unstable")) {
+                // The downloaded version of the dependency is unstable -> redownload it.
+                depDir.deleteRecursively()
+                archive.delete()
+                extractedDependencies.removeAndSave(dependency)
+            } else {
+                return
+            }
         }
 
         if (showInfo && !isInfoShown) {
             println("Downloading native dependencies (LLVM, sysroot etc). This is a one-time action performed only on the first run of the compiler.")
             isInfoShown = true
         }
-        val fileName = "$depName.$archiveExtension"
-        val archive = cacheDirectory.resolve(fileName)
-        val url = URL("$dependenciesUrl/$fileName")
 
         if (!archive.exists()) {
             if (airplaneMode) {
@@ -155,13 +177,17 @@ class DependencyProcessor(dependenciesRoot: File,
         }
         println("Extracting dependency: $archive into $dependenciesDirectory")
         extractor.extract(archive, dependenciesDirectory)
-        extractedDependencies.addWithSave(depName)
+        extractedDependencies.addAndSave(depName)
     }
 
     companion object {
-        val lock = ReentrantLock()
+        private val lock = ReentrantLock()
 
         const val DEFAULT_HOME_DEPENDENCY_CACHE = ".konan/cache"
+
+        @JvmStatic
+        val defaultDependenciesRoot
+            get() = Paths.get(System.getProperty("user.home")).resolve(".konan/dependencies").toFile()
     }
 
     fun run() = lock.withLock {

@@ -86,8 +86,14 @@ class LibraryWriterImpl(override val libDir: File, moduleName: String, currentAb
     }
 
     override fun addLinkDependencies(libraries: List<KonanLibraryReader>) {
-        if (libraries.isEmpty()) return
-        manifestProperties.setProperty("dependencies", libraries .map { it.uniqueName } . joinToString(" "))
+        if (libraries.isEmpty()) {
+            manifestProperties.remove("depends") 
+            // make sure there are no leftovers from the .def file.
+            return
+        } else {
+            val newValue = libraries .map { it.uniqueName } . joinToString(" ")
+            manifestProperties.setProperty("depends", newValue)
+        }
     }
 
     override fun addManifestAddend(path: String) {
@@ -97,6 +103,10 @@ class LibraryWriterImpl(override val libDir: File, moduleName: String, currentAb
 
     override fun addEscapeAnalysis(escapeAnalysis: ByteArray) {
         escapeAnalysisFile.writeBytes(escapeAnalysis)
+    }
+
+    override fun addDataFlowGraph(dataFlowGraph: ByteArray) {
+        dataFlowGraphFile.writeBytes(dataFlowGraph)
     }
 
     override fun commit() {
@@ -120,7 +130,8 @@ internal fun buildLibrary(
     llvmModule: LLVMModuleRef, 
     nopack: Boolean, 
     manifest: String?,
-    escapeAnalysis: ByteArray?): KonanLibraryWriter {
+    escapeAnalysis: ByteArray?,
+    dataFlowGraph: ByteArray?): KonanLibraryWriter {
 
     val library = LibraryWriterImpl(output, moduleName, abiVersion, target, nopack)
 
@@ -132,9 +143,10 @@ internal fun buildLibrary(
     included.forEach {
         library.addIncludedBinary(it)
     }
-    library.addLinkDependencies(linkDependencies)
     manifest ?.let { library.addManifestAddend(it) }
+    library.addLinkDependencies(linkDependencies)
     escapeAnalysis?.let { library.addEscapeAnalysis(it) }
+    dataFlowGraph?.let { library.addDataFlowGraph(it) }
 
     library.commit()
     return library

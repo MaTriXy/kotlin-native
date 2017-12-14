@@ -57,6 +57,10 @@ class StubGenerator(
     val excludedFunctions: Set<String>
         get() = configuration.excludedFunctions
 
+    val noStringConversion: Set<String>
+        get() = configuration.noStringConversion
+
+
     val platformWStringTypes = setOf("LPCWSTR")
 
     /**
@@ -160,7 +164,10 @@ class StubGenerator(
 
     private val macroConstantsByName = nativeIndex.macroConstants.associateBy { it.name }
 
-    val kotlinFile = KotlinFile(pkgName, namesToBeDeclared = computeNamesToBeDeclared())
+    val kotlinFile = object : KotlinFile(pkgName, namesToBeDeclared = computeNamesToBeDeclared()) {
+        override val mappingBridgeGenerator: MappingBridgeGenerator
+            get() = this@StubGenerator.mappingBridgeGenerator
+    }
 
     private fun computeNamesToBeDeclared(): MutableList<String> {
         return mutableListOf<String>().apply {
@@ -302,10 +309,11 @@ class StubGenerator(
         return false
     }
 
-    fun representCFunctionParameterAsString(type: Type): Boolean {
+    fun representCFunctionParameterAsString(function: FunctionDecl, type: Type): Boolean {
         val unwrappedType = type.unwrapTypedefs()
         return unwrappedType is PointerType && unwrappedType.pointeeIsConst &&
-                unwrappedType.pointeeType.unwrapTypedefs() == CharType
+                unwrappedType.pointeeType.unwrapTypedefs() == CharType &&
+                !noStringConversion.contains(function.name)
     }
 
     // We take this approach as generic 'const short*' shall not be used as String.
@@ -402,7 +410,8 @@ class StubGenerator(
                     val readBitsExpr =
                             "readBits(this.rawPtr, ${field.offset}, ${field.size}, $signed).${rawType.convertor!!}()"
 
-                    out("    get() = ${typeInfo.argFromBridged(readBitsExpr, kotlinFile)}")
+                    val getExpr = typeInfo.argFromBridged(readBitsExpr, kotlinFile, object : NativeBacked {})
+                    out("    get() = $getExpr")
 
                     val rawValue = typeInfo.argToBridged("value")
                     val setExpr = "writeBits(this.rawPtr, ${field.offset}, ${field.size}, $rawValue.toLong())"
@@ -594,7 +603,7 @@ class StubGenerator(
         init {
             // TODO: support dumpShims
             val kotlinParameters = mutableListOf<Pair<String, KotlinType>>()
-            val bodyGenerator = KotlinCodeBuilder()
+            val bodyGenerator = KotlinCodeBuilder(scope = kotlinFile)
             val bridgeArguments = mutableListOf<TypedKotlinValue>()
 
             func.parameters.forEachIndexed { index, parameter ->
@@ -608,7 +617,7 @@ class StubGenerator(
 
                 val representAsValuesRef = representCFunctionParameterAsValuesRef(parameter.type)
 
-                val bridgeArgument = if (representCFunctionParameterAsString(parameter.type)) {
+                val bridgeArgument = if (representCFunctionParameterAsString(func, parameter.type)) {
                     kotlinParameters.add(parameterName to KotlinTypes.string.makeNullable())
                     bodyGenerator.pushMemScoped()
                     "$parameterName?.cstr?.getPointer(memScope)"
@@ -800,7 +809,7 @@ class StubGenerator(
             }
         }
 
-        nativeIndex.globals.forEach {
+        nativeIndex.globals.filter { it.name !in excludedFunctions }.forEach {
             try {
                 stubs.add(
                         GlobalVariableStub(it, this)
@@ -864,6 +873,7 @@ class StubGenerator(
                 add("UNUSED_PARAMETER") // For constructors.
                 add("MANY_INTERFACES_MEMBER_NOT_IMPLEMENTED") // Workaround for multiple-inherited properties.
                 add("EXTENSION_SHADOWED_BY_MEMBER") // For Objective-C categories represented as extensions.
+                add("REDUNDANT_NULLABLE") // This warning appears due to Obj-C typedef nullability incomplete support.
             }
         }
 
@@ -976,9 +986,19 @@ class StubGenerator(
     }
 
     val simpleBridgeGenerator: SimpleBridgeGenerator =
-            SimpleBridgeGeneratorImpl(platform, pkgName, jvmFileClassName, libraryForCStubs, kotlinFile)
+            SimpleBridgeGeneratorImpl(
+                    platform,
+                    pkgName,
+                    jvmFileClassName,
+                    libraryForCStubs,
+                    topLevelNativeScope = object : NativeScope {
+                        override val mappingBridgeGenerator: MappingBridgeGenerator
+                            get() = this@StubGenerator.mappingBridgeGenerator
+                    },
+                    topLevelKotlinScope = kotlinFile
+            )
 
     val mappingBridgeGenerator: MappingBridgeGenerator =
-            MappingBridgeGeneratorImpl(declarationMapper, simpleBridgeGenerator, kotlinFile)
+            MappingBridgeGeneratorImpl(declarationMapper, simpleBridgeGenerator)
 
 }

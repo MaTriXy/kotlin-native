@@ -16,8 +16,8 @@
 
 package org.jetbrains.kotlin.backend.konan.library.impl
 
+import org.jetbrains.kotlin.backend.konan.KonanConfig
 import org.jetbrains.kotlin.backend.konan.library.KonanLibraryReader
-import org.jetbrains.kotlin.backend.konan.createInteropLibrary
 import org.jetbrains.kotlin.backend.konan.serialization.emptyPackages
 import org.jetbrains.kotlin.backend.konan.serialization.deserializeModule
 import org.jetbrains.kotlin.konan.file.File
@@ -26,7 +26,7 @@ import org.jetbrains.kotlin.config.LanguageVersionSettings
 import org.jetbrains.kotlin.konan.target.KonanTarget
 
 class LibraryReaderImpl(var libraryFile: File, val currentAbiVersion: Int,
-    val target: KonanTarget? = null, override val isDefaultLink: Boolean = false)
+    val target: KonanTarget? = null, override val isDefaultLibrary: Boolean = false)
     : KonanLibraryReader {
 
     // For the zipped libraries inPlace gives files from zip file system
@@ -51,7 +51,8 @@ class LibraryReaderImpl(var libraryFile: File, val currentAbiVersion: Int,
         }
 
     val targetList = inPlace.targetsDir.listFiles.map{it.name}
-    override val escapeAnalysis: ByteArray? by lazy { inPlace.escapeAnalysisFile.let { if (it.exists) it.readBytes() else null } }
+    override val escapeAnalysis by lazy { inPlace.escapeAnalysisFile.let { if (it.exists) it.readBytes() else null } }
+    override val dataFlowGraph by lazy { inPlace.dataFlowGraphFile.let { if (it.exists) it.readBytes() else null } }
 
     override val libraryName 
         get() = inPlace.libraryName
@@ -68,32 +69,36 @@ class LibraryReaderImpl(var libraryFile: File, val currentAbiVersion: Int,
     override val linkerOpts: List<String>
         get() = manifestProperties.propertyList("linkerOpts", target!!.detailedName)
 
-    override val dependencies: List<String>
-        get() = manifestProperties.propertyList("dependencies")
+    override val unresolvedDependencies: List<String>
+        get() = manifestProperties.propertyList("depends")
 
-    val moduleHeaderData: ByteArray by lazy {
+    val resolvedDependencies = mutableListOf<LibraryReaderImpl>()
+
+    override val moduleHeaderData: ByteArray by lazy {
         reader.loadSerializedModule()
     }
 
-    override val isNeededForLink: Boolean
-        get() {
-            packagesAccessed.forEach {
-                if (!emptyPackages(moduleHeaderData).contains(it)) {
-                    return true
-                }
-            }
-            return false
+    override var isNeededForLink: Boolean = false
+        private set
+
+    private val emptyPackages by lazy { emptyPackages(moduleHeaderData) }
+
+    override fun markPackageAccessed(fqName: String) {
+        if (!isNeededForLink // fast path
+                && !emptyPackages.contains(fqName)) {
+            isNeededForLink = true
         }
+    }
 
-    val packagesAccessed = mutableSetOf<String>()
-
-    fun packageMetadata(fqName: String): ByteArray {
-        packagesAccessed.add(fqName)
+    override fun packageMetadata(fqName: String): ByteArray {
         return reader.loadSerializedPackageFragment(fqName)
     }
 
     override fun moduleDescriptor(specifics: LanguageVersionSettings) 
-        = deserializeModule(specifics, {packageMetadata(it)}, moduleHeaderData, createInteropLibrary(this))
+        = deserializeModule(specifics, this)
 
 }
+
+internal fun <T: KonanLibraryReader> List<T>.purgeUnneeded(config: KonanConfig): List<T> =
+        this.filter{ (!it.isDefaultLibrary && !config.purgeUserLibs) || it.isNeededForLink }
 

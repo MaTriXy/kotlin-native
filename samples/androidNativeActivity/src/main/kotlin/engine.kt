@@ -15,7 +15,10 @@
  */
 
 import kotlinx.cinterop.*
-import android.*
+import platform.android.*
+import platform.posix.*
+import platform.gles3.*
+import platform.linux.*
 
 fun logError(message: String) {
     __android_log_write(ANDROID_LOG_ERROR, "KonanActivity", message)
@@ -26,7 +29,7 @@ fun logInfo(message: String) {
 }
 
 val errno: Int
-    get() = interop_errno()
+    get() = posix_errno()
 
 fun getUnixError() = strerror(errno)!!.toKString()
 
@@ -58,6 +61,7 @@ class Engine(val arena: NativePlacement, val state: NativeActivityState) {
 
     private var needRedraw = true
     private var animating = false
+    private val pointerSize = CPointerVar.size
 
     fun mainLoop() {
         while (true) {
@@ -95,7 +99,7 @@ class Engine(val arena: NativePlacement, val state: NativeActivityState) {
 
     private fun processSysEvent(fd: IntVar): Boolean = memScoped {
         val eventPointer = alloc<COpaquePointerVar>()
-        val readBytes = read(fd.value, eventPointer.ptr, pointerSize.signExtend<size_t>()).toLong()
+        val readBytes = read(fd.value, eventPointer.ptr, pointerSize.narrow()).toLong()
         if (readBytes != pointerSize.toLong()) {
             logError("Failure reading event, $readBytes read: ${getUnixError()}")
             return true

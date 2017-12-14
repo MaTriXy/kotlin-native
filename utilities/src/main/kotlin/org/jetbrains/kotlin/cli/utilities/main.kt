@@ -27,14 +27,18 @@ import org.jetbrains.kotlin.cli.bc.main as konancMain
 import org.jetbrains.kotlin.native.interop.gen.jvm.interop 
 import org.jetbrains.kotlin.cli.klib.main as klibMain
 
+private val NODEFAULTLIBS = "-nodefaultlibs"
+private val PURGE_USER_LIBS = "--purge_user_libs"
+
 fun invokeCinterop(args: Array<String>) {
-    val cinteropArgFilter = listOf("-library", "-r", "-repo", "-nodefaultlibs")
+    val cinteropArgFilter = listOf(NODEFAULTLIBS, PURGE_USER_LIBS)
 
     var outputFileName = "nativelib"
     var target = "host"
     val libraries = mutableListOf<String>()
     val repos = mutableListOf<String>()
     var noDefaultLibs = false
+    var purgeUserLibs = false
     for (i in args.indices) {
         val arg = args[i]
         val nextArg = args.getOrNull(i + 1)
@@ -46,8 +50,10 @@ fun invokeCinterop(args: Array<String>) {
             libraries.addIfNotNull(nextArg)
         if (arg == "-r" || arg == "-repo")
             repos.addIfNotNull(nextArg)
-        if (arg == "-nodefaultlibs")
+        if (arg == NODEFAULTLIBS)
             noDefaultLibs = true
+        if (arg == PURGE_USER_LIBS)
+            purgeUserLibs = true
     }
 
 
@@ -67,7 +73,7 @@ fun invokeCinterop(args: Array<String>) {
         val library = KonanLibrary(it.libraryFile)
         val manifestProperties = library.manifestFile.loadProperties()
         // TODO: handle missing properties?
-        manifestProperties["pkg"]?.let {
+        manifestProperties["package"]?.let {
             val pkg = it as String
             val headerIds = (manifestProperties["includedHeaders"] as String).split(' ')
             val arg = "$pkg:${headerIds.joinToString(",")}"
@@ -94,7 +100,10 @@ fun invokeCinterop(args: Array<String>) {
         "-o", outputFileName,
         "-target", target,
         "-manifest", manifest.path
-    ) + cinteropArgsToCompiler + libraries.flatMap { listOf("-library", it) } + repos.flatMap { listOf("-repo", it) }
+    ) + cinteropArgsToCompiler + libraries.flatMap { listOf("-library", it) } + repos.flatMap { listOf("-repo", it) } +
+            (if (noDefaultLibs) arrayOf(NODEFAULTLIBS) else emptyArray()) +
+            (if (purgeUserLibs) arrayOf(PURGE_USER_LIBS) else emptyArray())
+
     konancMain(konancArgs)
 }
 

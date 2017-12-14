@@ -43,8 +43,14 @@ internal class KotlinObjCClassInfoGenerator(override val context: Context) : Con
         val companionObjectDescriptor = descriptor.companionObjectDescriptor
         val classMethods = companionObjectDescriptor?.generateOverridingMethodDescs() ?: emptyList()
 
-        val superclassName = descriptor.getSuperClassNotAny()!!.name.asString()
-        val protocolNames = descriptor.getSuperInterfaces().map { it.name.asString().removeSuffix("Protocol") }
+        val superclassName = descriptor.getSuperClassNotAny()!!.let {
+            context.llvm.imports.add(it.llvmSymbolOrigin)
+            it.name.asString()
+        }
+        val protocolNames = descriptor.getSuperInterfaces().map {
+            context.llvm.imports.add(it.llvmSymbolOrigin)
+            it.name.asString().removeSuffix("Protocol")
+        }
 
         val bodySize =
                 LLVMStoreSizeOfType(llvmTargetData, context.llvmDeclarations.forClass(descriptor).bodyType).toInt()
@@ -111,19 +117,25 @@ internal class KotlinObjCClassInfoGenerator(override val context: Context) : Con
         }
     }
 
+    private val impType = pointerType(functionType(int8TypePtr, true, int8TypePtr, int8TypePtr))
+
     private inner class ObjCMethodDesc(
             val selector: String, val encoding: String, val impFunction: LLVMValueRef
     ) : Struct(
             runtime.objCMethodDescription,
+            constPointer(impFunction).bitcast(impType),
             staticData.cStringLiteral(selector),
-            staticData.cStringLiteral(encoding),
-            constPointer(impFunction).bitcast(int8TypePtr)
+            staticData.cStringLiteral(encoding)
     )
 
     private fun generateMethodDesc(info: ObjCMethodInfo) = ObjCMethodDesc(
             info.selector,
             info.encoding,
-            context.llvm.externalFunction(info.imp, functionType(voidType))
+            context.llvm.externalFunction(
+                    info.imp,
+                    functionType(voidType),
+                    origin = info.bridge.llvmSymbolOrigin
+            )
     )
 
     private fun ClassDescriptor.generateOverridingMethodDescs(): List<ObjCMethodDesc> =

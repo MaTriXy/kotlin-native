@@ -32,6 +32,7 @@ enum class KonanPhase(val description: String,
     /* ... ... */ LOWER_BEFORE_INLINE("Special operations processing before inlining"),
     /* ... ... */ LOWER_INLINE_CONSTRUCTORS("Inline constructors transformation", LOWER_BEFORE_INLINE),
     /* ... ... */ LOWER_INLINE("Functions inlining", LOWER_INLINE_CONSTRUCTORS, LOWER_BEFORE_INLINE),
+    /* ... ... */ LOWER_AFTER_INLINE("Special operations processing after inlining"),
     /* ... ... ...  */ DESERIALIZER("Deserialize inline bodies"),
     /* ... ... */ LOWER_INTEROP_PART1("Interop lowering, part 1", LOWER_INLINE),
     /* ... ... */ LOWER_FOR_LOOPS("For loops lowering"),
@@ -58,7 +59,10 @@ enum class KonanPhase(val description: String,
     /* ... ... */ RETURNS_INSERTION("Returns insertion for Unit functions", AUTOBOX, LOWER_COROUTINES, LOWER_ENUMS),
     /* ... */ BITCODE("LLVM BitCode Generation"),
     /* ... ... */ RTTI("RTTI Generation"),
-    /* ... ... */ ESCAPE_ANALYSIS("Escape analysis"),
+    /* ... ... */ BUILD_DFG("Data flow graph building"),
+    /* ... ... */ SERIALIZE_DFG("Data flow graph serializing", BUILD_DFG),
+    /* ... ... */ DESERIALIZE_DFG("Data flow graph deserializing"),
+    /* ... ... */ ESCAPE_ANALYSIS("Escape analysis", BUILD_DFG, DESERIALIZE_DFG),
     /* ... ... */ CODEGEN("Code Generation"),
     /* ... ... */ BITCODE_LINKER("Bitcode linking"),
     /* */ LINK_STAGE("Link stage"),
@@ -83,9 +87,8 @@ object KonanPhases {
 
             // Don't serialize anything to a final executable.
             KonanPhase.SERIALIZER.enabled = 
-                (get(PRODUCE) == CompilerOutputKind.LIBRARY)
-            KonanPhase.LINK_STAGE.enabled = 
-                (get(PRODUCE) == CompilerOutputKind.PROGRAM)
+                (config.produce == CompilerOutputKind.LIBRARY)
+            KonanPhase.LINK_STAGE.enabled = config.produce.isNativeBinary
 
             KonanPhase.TEST_PROCESSOR.enabled = getBoolean(GENERATE_TEST_RUNNER)
 

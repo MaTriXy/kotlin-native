@@ -1,5 +1,7 @@
 apply plugin: 'konan'
 
+konan.targets = ['macbook', 'linux']
+
 konanArtifacts {
-    EchoServer
+    program('EchoServer')
 }

@@ -5,8 +5,10 @@
 -(void)print:(const char*)string;
 @end;
 
+typedef NSString NSStringTypedef;
+
 @interface Foo : NSObject
-@property NSString* name;
+@property NSStringTypedef* name;
 -(void)helloWithPrinter:(id <Printer>)printer;
 @end;
 
@@ -25,3 +27,14 @@
 @end;
 
 void replacePairElements(id <MutablePair> pair, int first, int second);
+
+int invoke1(int arg, int (^block)(int)) {
+    return block(arg);
+}
+
+void invoke2(void (^block)(void)) {
+    block();
+}
+
+int (^getSupplier(int x))(void);
+Class (^ _Nonnull getClassGetter(NSObject* obj))(void);

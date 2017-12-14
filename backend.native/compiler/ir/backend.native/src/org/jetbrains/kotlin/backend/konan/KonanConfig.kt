@@ -19,10 +19,8 @@ package org.jetbrains.kotlin.backend.konan
 import com.intellij.openapi.project.Project
 import org.jetbrains.kotlin.backend.konan.descriptors.createForwardDeclarationsModule
 import org.jetbrains.kotlin.backend.konan.library.*
-import org.jetbrains.kotlin.backend.konan.library.impl.LibraryReaderImpl
-import org.jetbrains.kotlin.backend.konan.util.profile
-import org.jetbrains.kotlin.backend.konan.util.removeSuffixIfPresent
-import org.jetbrains.kotlin.backend.konan.util.suffixIfNot
+import org.jetbrains.kotlin.backend.konan.library.impl.*
+import org.jetbrains.kotlin.backend.konan.util.*
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns
 import org.jetbrains.kotlin.cli.common.CLIConfigurationKeys
 import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity
@@ -30,6 +28,7 @@ import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity.*
 import org.jetbrains.kotlin.config.CommonConfigurationKeys
 import org.jetbrains.kotlin.config.CompilerConfiguration
 import org.jetbrains.kotlin.descriptors.impl.ModuleDescriptorImpl
+import org.jetbrains.kotlin.descriptors.ModuleDescriptor
 import org.jetbrains.kotlin.konan.file.File
 import org.jetbrains.kotlin.konan.target.*
 import org.jetbrains.kotlin.konan.util.DependencyProcessor
@@ -43,14 +42,15 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
     internal val targetManager = TargetManager(
         configuration.get(KonanConfigKeys.TARGET))
 
-    val indirectBranchesAreAllowed = targetManager.target != KonanTarget.WASM32
+    private val target = targetManager.target
 
     init {
-        val target = targetManager.target
         if (!target.enabled) {
             error("Target $target is not available on the ${TargetManager.host} host")
         }
     }
+
+    val indirectBranchesAreAllowed = target != KonanTarget.WASM32
 
     private fun Distribution.prepareDependencies(checkDependencies: Boolean) {
         if (checkDependencies) {
@@ -64,13 +64,23 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
         prepareDependencies(configuration.getBoolean(KonanConfigKeys.CHECK_DEPENDENCIES))
     }
 
-    private val produce = configuration.get(KonanConfigKeys.PRODUCE)!!
-    private val suffix = produce.suffix(targetManager.target)
+    internal val clang = TargetClang(distribution.properties, distribution.dependenciesDir, target)
+
+    internal val produce get() = configuration.get(KonanConfigKeys.PRODUCE)!!
+    private val prefix = produce.prefix(target)
+    private val suffix = produce.suffix(target)
     val outputName = configuration.get(KonanConfigKeys.OUTPUT)?.removeSuffixIfPresent(suffix) ?: produce.name.toLowerCase()
-    val outputFile = outputName.suffixIfNot(produce.suffix(targetManager.target))
+    val outputFile = outputName
+        .prefixIfNot(prefix)
+        .suffixIfNot(suffix)
+
+    val tempFiles = TempFiles(outputName)
 
     val moduleId: String
         get() = configuration.get(KonanConfigKeys.MODULE_NAME) ?: File(outputName).name
+
+    internal val purgeUserLibs: Boolean
+        get() = configuration.getBoolean(KonanConfigKeys.PURGE_USER_LIBS)
 
     private val libraryNames: List<String>
         get() = configuration.getList(KonanConfigKeys.LIBRARY_FILES)
@@ -78,25 +88,31 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
     private val repositories = configuration.getList(KonanConfigKeys.REPOSITORIES)
     private val resolver = defaultResolver(repositories, distribution)
 
-    val immediateLibraries: List<LibraryReaderImpl> by lazy {
-        resolver.resolveImmediateLibraries(
+    internal val immediateLibraries: List<LibraryReaderImpl> by lazy {
+        val result = resolver.resolveImmediateLibraries(
                 libraryNames,
-                targetManager.target,
+                target,
                 currentAbiVersion,
                 configuration.getBoolean(KonanConfigKeys.NOSTDLIB),
                 configuration.getBoolean(KonanConfigKeys.NODEFAULTLIBS),
-                false
-        ).let {
-            warnOnLibraryDuplicates(it.map { it.libraryFile })
-            it.distinctBy { it.libraryFile.absolutePath }
-        }
+                { msg -> configuration.report(STRONG_WARNING, msg) } 
+        )
+        resolver.resolveLibrariesRecursive(result, target, currentAbiVersion)
+        result
     }
 
-    val libraries: List<LibraryReaderImpl> by lazy {
-        resolver.resolveLibrariesRecursive(immediateLibraries, targetManager.target, currentAbiVersion)
+    fun librariesWithDependencies(moduleDescriptor: ModuleDescriptor?): List<KonanLibraryReader> {
+        if (moduleDescriptor == null) error("purgeUnneeded() only works correctly after resolve is over, and we have successfully marked package files as needed or not needed.")
+
+        return immediateLibraries.purgeUnneeded(this).withResolvedDependencies()
     }
 
     private val loadedDescriptors = loadLibMetadata()
+
+    internal val defaultNativeLibraries = 
+        if (produce == CompilerOutputKind.PROGRAM) 
+            File(distribution.defaultNatives).listFiles.map { it.absolutePath } 
+        else emptyList()
 
     internal val nativeLibraries: List<String> = 
         configuration.getList(KonanConfigKeys.NATIVE_LIBRARY_FILES)
@@ -109,10 +125,11 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
         val allMetadata = mutableListOf<ModuleDescriptorImpl>()
         val specifics = configuration.get(CommonConfigurationKeys.LANGUAGE_VERSION_SETTINGS)!!
 
+        val libraries = immediateLibraries.withResolvedDependencies()
         for (klib in libraries) {
             profile("Loading ${klib.libraryName}") {
                 // MutableModuleContext needs ModuleDescriptorImpl, rather than ModuleDescriptor.
-                val moduleDescriptor = klib.moduleDescriptor(specifics) as ModuleDescriptorImpl
+                val moduleDescriptor = klib.moduleDescriptor(specifics)
                 allMetadata.add(moduleDescriptor)
             }
         }
@@ -141,13 +158,6 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
         }
 
         loadedDescriptors
-    }
-
-    private fun warnOnLibraryDuplicates(resolvedLibraries: List<File>) {
-        val duplicates = resolvedLibraries.groupBy { it.absolutePath } .values.filter { it.size > 1 }
-        duplicates.forEach {
-            configuration.report(STRONG_WARNING, "library included more than once: ${it.first().absolutePath}")
-        }
     }
 }
 

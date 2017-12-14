@@ -8,7 +8,17 @@ fun main(args: Array<String>) {
 }
 
 fun run() {
+    println(
+            getSupplier(
+                    invoke1(42) { it * 2 }
+            )!!()
+    )
+
     val foo = Foo()
+
+    val classGetter = getClassGetter(foo)
+    invoke2 { println(classGetter()) }
+
     foo.hello()
     foo.name = "everybody"
     foo.helloWithPrinter(object : NSObject(), PrinterProtocol {
@@ -48,8 +58,8 @@ fun MutablePairProtocol.swap() {
 }
 
 class Bar : Foo() {
-    override fun helloWithPrinter(printer: PrinterProtocol) = memScoped {
-        printer.print("Hello from Kotlin".cstr.getPointer(memScope))
+    override fun helloWithPrinter(printer: PrinterProtocol?) = memScoped {
+        printer!!.print("Hello from Kotlin".cstr.getPointer(memScope))
     }
 }
 

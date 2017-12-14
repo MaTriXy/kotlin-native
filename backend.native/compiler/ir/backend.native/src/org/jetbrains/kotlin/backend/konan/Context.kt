@@ -44,6 +44,7 @@ import org.jetbrains.kotlin.ir.visitors.IrElementVisitor
 import org.jetbrains.kotlin.ir.visitors.IrElementVisitorVoid
 import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.ir.visitors.acceptVoid
+import org.jetbrains.kotlin.konan.target.CompilerOutputKind
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.psi2ir.generators.GeneratorContext
 import org.jetbrains.kotlin.resolve.DescriptorUtils
@@ -156,10 +157,14 @@ internal class SpecialDeclarationsFactory(val context: Context) {
 internal class Context(config: KonanConfig) : KonanBackendContext(config) {
     lateinit var moduleDescriptor: ModuleDescriptor
 
-    override val builtIns: KonanBuiltIns by lazy(PUBLICATION) { moduleDescriptor.builtIns as KonanBuiltIns }
+    override val builtIns: KonanBuiltIns by lazy(PUBLICATION) {
+        moduleDescriptor.builtIns as KonanBuiltIns
+    }
 
     val specialDeclarationsFactory = SpecialDeclarationsFactory(this)
-    override val reflectionTypes: ReflectionTypes by lazy(PUBLICATION) { ReflectionTypes(moduleDescriptor, FqName("konan.internal")) }
+    override val reflectionTypes: ReflectionTypes by lazy(PUBLICATION) {
+        ReflectionTypes(moduleDescriptor, FqName("konan.internal"))
+    }
     private val vtableBuilders = mutableMapOf<ClassDescriptor, ClassVtablesBuilder>()
 
     fun getVtableBuilder(classDescriptor: ClassDescriptor) = vtableBuilders.getOrPut(classDescriptor) {
@@ -171,16 +176,26 @@ internal class Context(config: KonanConfig) : KonanBackendContext(config) {
     // But we have to wait until the code generation phase,
     // to dump this information into generated file.
     var serializedLinkData: LinkData? = null
-    val moduleEscapeAnalysisResult: ModuleEscapeAnalysisResult.ModuleEAResult.Builder by lazy {
-        ModuleEscapeAnalysisResult.ModuleEAResult.newBuilder()
-    }
+    val escapeAnalysisResult = lazy { ModuleEscapeAnalysisResult.ModuleEAResult.newBuilder() }
+    var dataFlowGraph: ByteArray? = null
 
     @Deprecated("")
     lateinit var psi2IrGeneratorContext: GeneratorContext
 
+    val librariesWithDependencies by lazy {
+        config.librariesWithDependencies(moduleDescriptor)
+    }
+
+    fun needGlobalInit(field: IrField): Boolean {
+        if (field.descriptor.containingDeclaration !is PackageFragmentDescriptor) return false
+        // TODO: add some smartness here. Maybe if package of the field is in never accessed
+        // assume its global init can be actually omitted.
+        return true
+    }
+
     // TODO: make lateinit?
     var irModule: IrModuleFragment? = null
-        set(module: IrModuleFragment?) {
+        set(module) {
             if (field != null) {
                 throw Error("Another IrModule in the context.")
             }
@@ -199,7 +214,7 @@ internal class Context(config: KonanConfig) : KonanBackendContext(config) {
     }
 
     var llvmModule: LLVMModuleRef? = null
-        set(module: LLVMModuleRef?) {
+        set(module) {
             if (field != null) {
                 throw Error("Another LLVMModule in the context.")
             }
@@ -361,6 +376,10 @@ internal class Context(config: KonanConfig) : KonanBackendContext(config) {
         }
     }
 
-    lateinit var debugInfo:DebugInfo
+    lateinit var debugInfo: DebugInfo
+
+    val isDynamicLibrary: Boolean by lazy {
+        config.configuration.get(KonanConfigKeys.PRODUCE) == CompilerOutputKind.DYNAMIC
+    }
 }
 

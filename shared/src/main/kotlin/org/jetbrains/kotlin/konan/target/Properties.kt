@@ -38,8 +38,7 @@ fun File.saveProperties(properties: Properties) {
 
 fun Properties.saveToFile(file: File) = file.saveProperties(this)
 
-fun Properties.propertyString(key: String, suffix: String? = null): String?
-    = this.getProperty(key.suffix(suffix))
+fun Properties.propertyString(key: String, suffix: String? = null): String? = getProperty(key.suffix(suffix)) ?: this.getProperty(key)
 
 /**
  * TODO: this method working with suffixes should be replaced with
@@ -48,7 +47,9 @@ fun Properties.propertyString(key: String, suffix: String? = null): String?
  */
 fun Properties.propertyList(key: String, suffix: String? = null): List<String> {
     val value = this.getProperty(key.suffix(suffix)) ?: this.getProperty(key)
-    return value?.split(' ') ?: emptyList()
+    if (value?.isBlank() == true) return emptyList()
+
+    return value?.split(Regex("\\s+")) ?: emptyList()
 }
 
 fun Properties.hasProperty(key: String, suffix: String? = null): Boolean

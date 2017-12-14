@@ -127,7 +127,7 @@ void onThreadExit(void (*destructor)()) {
 #ifdef KONAN_WASM
   // No way to do that.
 #else
-  ::atexit(destructor);
+#error "How to do onThreadExit()?"
 #endif
 #else  // !KONAN_NO_THREADS
   // We cannot use pthread_cleanup_push() as it is lexical scope bound.
@@ -308,7 +308,7 @@ extern "C" {
     void _ZNKSt3__221__basic_string_commonILb1EE20__throw_length_errorEv(void) {
         Konan_abort("TODO: throw_length_error not implemented.");
     }
-    int _ZNSt3__212__next_primeEm(unsigned long n) {
+    int _ZNSt3__212__next_primeEj(unsigned long n) {
         static unsigned long primes[] = {
                 11UL,
                 101UL,

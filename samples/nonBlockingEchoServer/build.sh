@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 
 DIR=$(cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd )
-PATH=$DIR/../../dist/bin:$DIR/../../bin:$PATH
+
+source "$DIR/../konan.sh"
 
 if [ x$TARGET == x ]; then
 case "$OSTYPE" in
@@ -21,10 +22,7 @@ COMPILER_ARGS=${!var} # add -opt for an optimized build.
 mkdir -p $DIR/build/c_interop/
 mkdir -p $DIR/build/bin/
 
-cinterop -def $DIR/src/main/c_interop/sockets.def -copt "$CFLAGS" -target $TARGET \
-	 -o $DIR/build/c_interop/sockets || exit 1
-
 konanc $COMPILER_ARGS -target $TARGET $DIR/src/main/kotlin/EchoServer.kt \
-       -library $DIR/build/c_interop/sockets -o $DIR/build/bin/EchoServer || exit 1
+        -o $DIR/build/bin/EchoServer || exit 1
 
 echo "Artifact path is $DIR/build/bin/EchoServer.kexe"

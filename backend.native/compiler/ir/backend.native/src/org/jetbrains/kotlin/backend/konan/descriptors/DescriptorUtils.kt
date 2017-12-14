@@ -31,13 +31,11 @@ import org.jetbrains.kotlin.builtins.isSuspendFunctionType
 import org.jetbrains.kotlin.descriptors.*
 import org.jetbrains.kotlin.descriptors.annotations.AnnotationDescriptor
 import org.jetbrains.kotlin.incremental.components.NoLookupLocation
+import org.jetbrains.kotlin.ir.descriptors.IrBuiltinOperatorDescriptorBase
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.resolve.OverridingUtil
-import org.jetbrains.kotlin.resolve.descriptorUtil.classId
-import org.jetbrains.kotlin.resolve.descriptorUtil.fqNameSafe
-import org.jetbrains.kotlin.resolve.descriptorUtil.getSuperClassNotAny
-import org.jetbrains.kotlin.resolve.descriptorUtil.getSuperInterfaces
+import org.jetbrains.kotlin.resolve.descriptorUtil.*
 import org.jetbrains.kotlin.resolve.scopes.MemberScope
 import org.jetbrains.kotlin.types.KotlinType
 import org.jetbrains.kotlin.types.typeUtil.isUnit
@@ -79,6 +77,8 @@ private val intrinsicAnnotation = FqName("konan.internal.Intrinsic")
 // TODO: check it is external?
 internal val FunctionDescriptor.isIntrinsic: Boolean
     get() = this.annotations.findAnnotation(intrinsicAnnotation) != null
+
+internal fun FunctionDescriptor.externalOrIntrinsic() = isExternal || isIntrinsic || (this is IrBuiltinOperatorDescriptorBase)
 
 private val intrinsicTypes = setOf(
         "kotlin.Boolean", "kotlin.Char",
@@ -319,3 +319,20 @@ fun AnnotationDescriptor.getStringValueOrNull(name: String): String? {
 }
 
 fun AnnotationDescriptor.getStringValue(name: String): String = this.getStringValueOrNull(name)!!
+
+private fun getPackagesFqNames(module: ModuleDescriptor): Set<FqName> {
+    val result = mutableSetOf<FqName>()
+
+    fun getSubPackages(fqName: FqName) {
+        result.add(fqName)
+        module.getSubPackagesOf(fqName) { true }.forEach { getSubPackages(it) }
+    }
+
+    getSubPackages(FqName.ROOT)
+    return result
+}
+
+fun ModuleDescriptor.getPackageFragments(): List<PackageFragmentDescriptor> =
+        getPackagesFqNames(this).flatMap {
+            getPackage(it).fragments.filter { it.module == this }
+        }

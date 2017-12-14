@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 
 DIR=$(cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd )
-PATH=$DIR/../../dist/bin:$DIR/../../bin:$PATH
-DEPS=$(dirname `type -p konanc`)/../dependencies
+
+source "$DIR/../konan.sh"
+
+DEPS="$HOME/.konan/dependencies"
 
 CFLAGS_macbook=-I$HOME/Library/Frameworks/SDL2.framework/Headers
 LINKER_ARGS_macbook="-F $HOME/Library/Frameworks -framework SDL2"

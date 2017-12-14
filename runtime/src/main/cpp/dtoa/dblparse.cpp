@@ -17,13 +17,13 @@
 
 #include <string.h>
 #include <math.h>
+#include <stdlib.h>
+
 #include "cbigint.h"
+#include "../Exceptions.h"
 #include "../KString.h"
 #include "../Natives.h"
-#include "../Exceptions.h"
 #include "../utf8.h"
-#include <stdlib.h>
-#include <string>
 
 #if defined(LINUX) || defined(FREEBSD) || defined(ZOS) || defined(MACOSX) || defined(AIX)
 #define USE_LL
@@ -642,7 +642,9 @@ KDouble Konan_FloatingPointParser_parseDoubleImpl (KString s, KInt e)
 {
   const KChar* utf16 = CharArrayAddressOfElementAt(s, 0);
   KStdString utf8;
-  utf8::unchecked::utf16to8(utf16, utf16 + s->count_, back_inserter(utf8));
+  TRY_CATCH(utf8::utf16to8(utf16, utf16 + s->count_, back_inserter(utf8)),
+            utf8::unchecked::utf16to8(utf16, utf16 + s->count_, back_inserter(utf8)),
+            /* Illegal UTF-16 string. */ ThrowNumberFormatException());
   const char *str = utf8.c_str();
   auto dbl = createDouble (str, e);
 

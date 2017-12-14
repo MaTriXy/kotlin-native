@@ -16,6 +16,7 @@
 
 buildscript {
    apply from: "$rootDir/gradle/kotlinGradlePlugin.gradle"
+   apply plugin: 'project-report'
 
    repositories {
        mavenCentral()
@@ -43,8 +44,8 @@ allprojects {
         // make Gradle aware of this to avoid multiple Kotlin runtimes in classpath:
         resolutionStrategy.dependencySubstitution {
             substitute module('org.jetbrains.kotlin:kotlin-runtime') with module(kotlinCompilerModule)
-            substitute module('org.jetbrains.kotlin:kotlin-stdlib')  with module(kotlinCompilerModule)
-            substitute module('org.jetbrains.kotlin:kotlin-reflect') with module(kotlinCompilerModule)
+            substitute module('org.jetbrains.kotlin:kotlin-stdlib')  with module(kotlinStdLibModule)
+            substitute module('org.jetbrains.kotlin:kotlin-reflect') with module(kotlinReflectModule)
         }
         // TODO: probably we should use kotlin-compiler without bundled runtime
     }
@@ -98,13 +99,17 @@ kotlinNativeInterop {
     llvm {
         dependsOn ":llvmDebugInfoC:debugInfoStaticLibrary"
         defFile 'llvm.def'
-        compilerOpts "-fPIC", "-I$llvmDir/include", "-I${project(':llvmDebugInfoC').projectDir}/src/main/include"
+	if (!project.parent.convention.plugins.platformInfo.isWindows())
+            compilerOpts "-fPIC"
+        compilerOpts "-I$llvmDir/include", "-I${project(':llvmDebugInfoC').projectDir}/src/main/include"
         linkerOpts "-L$llvmDir/lib", "-L${project(':llvmDebugInfoC').buildDir}/libs/debugInfo/static"
     }
 
     hash { // TODO: copy-pasted from ':common:compileHash'
-        compilerOpts '-fPIC'
-        linkerOpts '-fPIC'
+        if (!project.parent.convention.plugins.platformInfo.isWindows()) {
+            compilerOpts '-fPIC'
+            linkerOpts '-fPIC'
+	}
         linker 'clang++'
         linkOutputs ":common:${hostName}Hash"
 
@@ -119,6 +124,11 @@ kotlinNativeInterop {
 
 
 configurations {
+    kotlin_compiler_jar
+    kotlin_stdlib_jar
+    kotlin_reflect_jar
+    kotlin_script_runtime_jar
+
     cli_bcRuntime.extendsFrom compilerRuntime
 
     cli_bc {
@@ -127,6 +137,10 @@ configurations {
 }
 
 dependencies {
+    kotlin_compiler_jar "$kotlinCompilerModule@jar"
+    kotlin_stdlib_jar "$kotlinStdLibModule@jar"
+    kotlin_reflect_jar "$kotlinReflectModule@jar"
+    kotlin_script_runtime_jar "$kotlinScriptRuntimeModule@jar"
 
     compilerCompile "com.google.protobuf:protobuf-java:${protobufVersion}"
 
@@ -135,7 +149,7 @@ dependencies {
     compilerCompile kotlinNativeInterop['hash'].configuration
     compilerCompile project(':shared')
 
-    cli_bcCompile "org.jetbrains.kotlin:kotlin-runtime:$kotlin_version"
+    cli_bcCompile "org.jetbrains.kotlin:kotlin-runtime:$buildKotlinVersion"
     cli_bcCompile project(':shared')
     cli_bcCompile sourceSets.compiler.output
 
@@ -158,8 +172,8 @@ task start(dependsOn: "${hostName}Start")
 
 targetList.each { target ->
     def konanJvmArgs = ["-ea",
-    "-Dkonan.home=${project.parent.file('dist')}",
-    "-Djava.library.path=${project.buildDir}/nativelibs",
+    "-Dkonan.home=$distDir",
+    "-Djava.library.path=${project.buildDir}/nativelibs/$hostName",
     "-Dfile.encoding=UTF-8"]
 
     def defaultArgs = ['-nopack', '-nostdlib', '-nodefaultlibs', '-ea' ]
@@ -219,13 +233,26 @@ jar {
     dependsOn ':runtime:hostRuntime', 'external_jars'
 }
 
+def externalJars = ['compiler', 'stdlib', 'reflect', 'script_runtime']
+
+externalJars.each { arg ->
+    def jar = arg.replace('_', '-') // :(
+    task ("${arg}Copy", type:Copy) {
+        from configurations.getByName("kotlin_${arg}_jar") {
+            include "kotlin-${jar}*.jar"
+            rename "kotlin-${jar}(.*).jar", "kotlin-${jar}.jar"
+
+            into 'build/external_jars'
+        }
+    }
+}
+
 task external_jars(type: Copy) {
+    dependsOn externalJars.collect{"${it}Copy"}
+
     from configurations.compilerCompile {
 
         include "protobuf-java-${protobufVersion}.jar"
-
-        include 'kotlin-compiler*.jar'
-        rename 'kotlin-compiler(.*).jar', 'kotlin-compiler.jar'
 
         into 'build/external_jars'
     }

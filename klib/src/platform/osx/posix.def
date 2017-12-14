@@ -1,6 +1,7 @@
+depends =
 package = platform.posix
 headers = alloca.h ar.h assert.h complex.h dirent.h dlfcn.h err.h errno.h fcntl.h \
-    fenv.h fnmatch.h fts.h ftw.h getopt.h grp.h inttypes.h libgen.h limits.h \
+    fenv.h float.h fnmatch.h fts.h ftw.h getopt.h grp.h inttypes.h libgen.h limits.h \
     locale.h math.h memory.h netdb.h paths.h poll.h \
     pthread.h pwd.h regex.h resolv.h sched.h search.h semaphore.h setjmp.h sgtty.h signal.h \
     stdatomic.h stdint.h stdio.h stdlib.h string.h strings.h syslog.h termios.h \
@@ -9,15 +10,19 @@ headers = alloca.h ar.h assert.h complex.h dirent.h dlfcn.h err.h errno.h fcntl.
     netinet/icmp6.h netinet/if_ether.h netinet/in.h netinet/in_systm.h \
     netinet/ip.h netinet/ip6.h netinet/ip_icmp.h netinet/tcp.h netinet/udp.h \
     sys/ioctl.h sys/ipc.h sys/mman.h sys/poll.h sys/ptrace.h \
-    sys/queue.h sys/select.h sys/shm.h sys/stat.h \
-    sys/syslimits.h sys/time.h sys/times.h sys/wait.h
+    sys/queue.h sys/select.h sys/shm.h sys/socket.h sys/stat.h \
+    sys/syslimits.h sys/time.h sys/times.h sys/utsname.h sys/wait.h
 
-compilerOpts = -D_XOPEN_SOURCE
+compilerOpts = -D_XOPEN_SOURCE -DSHARED_LIBBIND -D_DARWIN_NO_64_BIT_INODE
+# -D_ANSI_SOURCE, sigh, breaks user_addr_t
+excludedFunctions = KERNEL_AUDIT_TOKEN KERNEL_SECURITY_TOKEN add_profil             \
+                    addrsel_policy_init                                             \
+		    in6addr_linklocal_allv2routers                                  \
+		    pfctlinput regwnexec_l res_send_setqhook res_send_setrhook      \
+		    unwhiteout zopen profil openat
 linkerOpts = -ldl -lresolv
 
 ---
-// cinterop -def klib/src/platform/osx/posix.def -o platform.posix.klib
-
 // Wrapper to access errno variable.
 static int posix_errno() {
     return errno;
@@ -42,4 +47,11 @@ static void posix_FD_SET(int bit, fd_set *set) {
 
 static int posix_FD_ISSET(int bit, fd_set *set) {
 	return FD_ISSET(bit, set);
+}
+
+static int init_sockets() {
+        return 0;
+}
+
+static void deinit_sockets() {
 }

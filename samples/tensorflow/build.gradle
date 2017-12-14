@@ -1,16 +1,25 @@
 apply plugin: 'konan'
 
+konan.targets = ['macbook', 'linux']
+
 def tensorflowHome = "${System.getProperty("user.home")}/.konan/third-party/tensorflow"
 
-konanInterop {
-    tensorflow {
-        includeDirs "${tensorflowHome}/include"
-    }
+task downloadTensorflow(type: Exec) {
+    workingDir getProjectDir()
+    commandLine './downloadTensorflow.sh'
 }
 
 konanArtifacts {
-    Tensorflow {
-        useInterop "tensorflow"
+    interop('TensorflowInterop') {
+        defFile "src/main/c_interop/tensorflow.def"
+        includeDirs "${tensorflowHome}/include"
+        dependsOn 'downloadTensorflow'
+    }
+
+    program('Tensorflow') {
+        libraries {
+            artifact 'TensorflowInterop'
+        }
         linkerOpts "-L${tensorflowHome}/lib -ltensorflow"
     }
 }
@@ -22,13 +31,4 @@ task warning {
         println "Note: You may need to specify LD_LIBRARY_PATH or DYLD_LIBRARY_PATH env variables to $tensorflowHome/lib if the TensorFlow dynamic library cannot be found."
 
     }
-}
-
-task downloadTensorflow(type: Exec) {
-    workingDir getProjectDir()
-    commandLine './downloadTensorflow.sh'
-}
-
-processTensorflowInterop {
-    dependsOn 'downloadTensorflow'
 }

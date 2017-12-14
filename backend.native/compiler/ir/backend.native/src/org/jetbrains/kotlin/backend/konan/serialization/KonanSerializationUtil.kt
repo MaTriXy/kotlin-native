@@ -16,10 +16,10 @@
 
 package org.jetbrains.kotlin.backend.konan.serialization
 
-import org.jetbrains.kotlin.backend.konan.Context
-import org.jetbrains.kotlin.backend.konan.InteropLibrary
-import org.jetbrains.kotlin.backend.konan.KonanBuiltIns
-import org.jetbrains.kotlin.backend.konan.KonanConfigKeys
+import org.jetbrains.kotlin.backend.konan.*
+import org.jetbrains.kotlin.backend.konan.descriptors.DeserializedKonanModule
+import org.jetbrains.kotlin.backend.konan.descriptors.createKonanModuleDescriptor
+import org.jetbrains.kotlin.backend.konan.library.KonanLibraryReader
 import org.jetbrains.kotlin.backend.konan.library.LinkData
 import org.jetbrains.kotlin.backend.konan.llvm.base64Decode
 import org.jetbrains.kotlin.backend.konan.llvm.base64Encode
@@ -38,6 +38,7 @@ import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.resolve.CompilerDeserializationConfiguration
 import org.jetbrains.kotlin.resolve.DescriptorUtils
+import org.jetbrains.kotlin.resolve.descriptorUtil.module
 import org.jetbrains.kotlin.resolve.scopes.DescriptorKindFilter
 import org.jetbrains.kotlin.resolve.scopes.MemberScope
 import org.jetbrains.kotlin.serialization.KonanDescriptorSerializer
@@ -76,15 +77,17 @@ object NullFlexibleTypeDeserializer : FlexibleTypeDeserializer {
 }
 
 fun createKonanPackageFragmentProvider(
+        reader: KonanLibraryReader,
         fragmentNames: List<String>,
-        packageLoader: (String)->KonanLinkData.PackageFragment,
         storageManager: StorageManager, module: ModuleDescriptor,
-        configuration: DeserializationConfiguration,
-        interopLibrary: InteropLibrary?): PackageFragmentProvider {
+        configuration: DeserializationConfiguration): PackageFragmentProvider {
 
     val packageFragments = fragmentNames.map{ 
-        KonanPackageFragment(it, packageLoader, storageManager, module) 
+        KonanPackageFragment(it, reader, storageManager, module)
     }
+
+    val interopLibrary = createInteropLibrary(reader)
+
     val syntheticInteropPackageFragments =
             interopLibrary?.createSyntheticPackages(module, packageFragments) ?: emptyList()
 
@@ -102,7 +105,7 @@ fun createKonanPackageFragmentProvider(
         LocalClassifierTypeSettings.Default, 
         ErrorReporter.DO_NOTHING,
         LookupTracker.DO_NOTHING, NullFlexibleTypeDeserializer,
-        emptyList(), notFoundClasses)
+        emptyList(), notFoundClasses, ContractDeserializer.DEFAULT)
 
         for (packageFragment in packageFragments) {
             packageFragment.components = components
@@ -123,24 +126,24 @@ public fun emptyPackages(libraryData: ByteArray)
     = parseModuleHeader(libraryData).emptyPackageList
 
 internal fun deserializeModule(languageVersionSettings: LanguageVersionSettings,
-                               packageLoader:(String)->ByteArray, library: ByteArray,
-                               interopLibrary: InteropLibrary?): ModuleDescriptorImpl {
+                               reader: KonanLibraryReader): ModuleDescriptorImpl {
 
-    val libraryProto = parseModuleHeader(library)
+    val libraryProto = parseModuleHeader(reader.moduleHeaderData)
+
     val moduleName = libraryProto.moduleName
 
     val storageManager = LockBasedStorageManager()
-    val builtIns = KonanBuiltIns(storageManager)
-    val moduleDescriptor = ModuleDescriptorImpl(
-            Name.special(moduleName), storageManager, builtIns)
-    builtIns.builtInsModule = moduleDescriptor
+    val moduleDescriptor = createKonanModuleDescriptor(
+            Name.special(moduleName), storageManager,
+            origin = DeserializedKonanModule(reader)
+    )
     val deserializationConfiguration = CompilerDeserializationConfiguration(languageVersionSettings)
 
     val provider = createKonanPackageFragmentProvider(
-        libraryProto.packageFragmentNameList,
-        {it -> parsePackageFragment(packageLoader(it))},
-        storageManager, 
-        moduleDescriptor, deserializationConfiguration, interopLibrary)
+            reader,
+            libraryProto.packageFragmentNameList,
+            storageManager,
+            moduleDescriptor, deserializationConfiguration)
 
     moduleDescriptor.initialize(provider)
 
@@ -194,23 +197,21 @@ internal class KonanSerializationUtil(val context: Context) {
     fun serializePackage(fqName: FqName, module: ModuleDescriptor) : 
         KonanLinkData.PackageFragment? {
 
-        val packageView = module.getPackage(fqName)
-
-        // TODO: ModuleDescriptor should be able to return 
+        // TODO: ModuleDescriptor should be able to return
         // the package only with the contents of that module, without dependencies
-        val keep: (DeclarationDescriptor) -> Boolean = 
-            { DescriptorUtils.getContainingModule(it) == module }
 
-        val fragments = packageView.fragments
-        if (fragments.filter(keep).isEmpty()) return null
+        val fragments = module.getPackage(fqName).fragments.filter { it.module == module }
+        if (fragments.isEmpty()) return null
 
-        val classifierDescriptors = KonanDescriptorSerializer
-            .sort(packageView.memberScope.getContributedDescriptors(DescriptorKindFilter.CLASSIFIERS))
-            .filter(keep)
+        val classifierDescriptors = KonanDescriptorSerializer.sort(
+                fragments.flatMap {
+                    it.getMemberScope().getContributedDescriptors(DescriptorKindFilter.CLASSIFIERS)
+                }
+        )
 
-        val members = fragments
-                .flatMap { fragment -> DescriptorUtils.getAllDescriptors(fragment.getMemberScope()) }
-                .filter(keep)
+        val members = fragments.flatMap { fragment ->
+            DescriptorUtils.getAllDescriptors(fragment.getMemberScope())
+        }
 
         val classesBuilder = KonanLinkData.Classes.newBuilder()
 
@@ -239,22 +240,15 @@ internal class KonanSerializationUtil(val context: Context) {
     }
 
     private fun getPackagesFqNames(module: ModuleDescriptor): Set<FqName> {
-        val fqNames = mutableSetOf<FqName>(FqName.ROOT)
-        getSubPackagesFqNames(module.getPackage(FqName.ROOT), fqNames)
-        return fqNames
-    }
-    private fun getSubPackagesFqNames(packageView: PackageViewDescriptor, result: MutableSet<FqName>) {
-        val fqName = packageView.fqName
-        if (!fqName.isRoot) {
+        val result = mutableSetOf<FqName>()
+
+        fun getSubPackages(fqName: FqName) {
             result.add(fqName)
+            module.getSubPackagesOf(fqName) { true }.forEach { getSubPackages(it) }
         }
 
-        for (descriptor in packageView.memberScope.getContributedDescriptors(
-                DescriptorKindFilter.PACKAGES, MemberScope.ALL_NAME_FILTER)) {
-            if (descriptor is PackageViewDescriptor) {
-                getSubPackagesFqNames(descriptor, result)
-            }
-        }
+        getSubPackages(FqName.ROOT)
+        return result
     }
 
     internal fun serializeModule(moduleDescriptor: ModuleDescriptor): LinkData {

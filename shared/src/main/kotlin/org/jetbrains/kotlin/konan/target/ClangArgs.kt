@@ -19,7 +19,7 @@ package org.jetbrains.kotlin.konan.target
 import org.jetbrains.kotlin.konan.properties.KonanProperties
 import org.jetbrains.kotlin.konan.file.File
 
-class ClangTarget(val target: KonanTarget, konanProperties: KonanProperties) {
+class ClangTargetArgs(val target: KonanTarget, konanProperties: KonanProperties) {
 
     val sysRoot = konanProperties.absoluteTargetSysRoot
     val targetArg = konanProperties.targetArg
@@ -54,7 +54,7 @@ class ClangTarget(val target: KonanTarget, konanProperties: KonanProperties) {
 
             KonanTarget.MINGW ->
                 listOf("-target", targetArg!!, "--sysroot=$sysRoot",
-                        "-DUSE_GCC_UNWIND=1", "-DUSE_PE_COFF_SYMBOLS=1", "-DKONAN_WINDOWS=1")
+                        "-DUSE_GCC_UNWIND=1", "-DUSE_PE_COFF_SYMBOLS=1", "-DKONAN_WINDOWS=1", "-Xclang", "-flto-visibility-public-std")
 
             KonanTarget.MACBOOK ->
                 listOf("--sysroot=$sysRoot", "-mmacosx-version-min=10.11", "-DKONAN_OSX=1",
@@ -92,11 +92,11 @@ class ClangTarget(val target: KonanTarget, konanProperties: KonanProperties) {
                         "-Xclang", "-isystem$sysRoot/include/libcxx", "-Xclang", "-isystem$sysRoot/lib/libcxxabi/include",
                         "-Xclang", "-isystem$sysRoot/include/compat", "-Xclang", "-isystem$sysRoot/include/libc")
         }
-        return result + (if (target != KonanTarget.WASM32) listOf("-g") else emptyList())
+        return result
     }
 }
 
-class ClangHost(val hostProperties: KonanProperties) {
+class ClangHostArgs(val hostProperties: KonanProperties) {
 
     val targetToolchain get() = hostProperties.absoluteTargetToolchain
     val gccToolchain get() = hostProperties.absoluteGccToolchain

@@ -36,8 +36,45 @@ fun nTabs(amount: Int): String {
     return String.format("%1$-${(amount+1)*4}s", "") 
 }
 
+fun String.prefixIfNot(prefix: String) =
+    if (this.startsWith(prefix)) this else "$prefix$this"
+
 fun String.suffixIfNot(suffix: String) =
     if (this.endsWith(suffix)) this else "$this$suffix"
 
 fun String.removeSuffixIfPresent(suffix: String) =
     if (this.endsWith(suffix)) this.dropLast(suffix.length) else this
+
+fun <T> Lazy<T>.getValueOrNull(): T? = if (isInitialized()) value else null
+
+// The listConstructor() and If functions are convenient to construct
+// command lines having a bunch of elements, lists and conditions.
+// Use them like
+//
+// listConstructor(
+//   anElement1,
+//   If (condition1,
+//      element2),
+//   aList1,
+//   If (condition2,
+//      alist3,
+//      alist4)
+//  )
+
+internal fun listConstructor(vararg elements: Any): List<String> {
+    val result = mutableListOf<String>()
+    for (element in elements) {
+        when (element) {
+            null -> {}
+            is String -> result.add(element)
+            is List<*> -> result.addAll(element as List<String>)
+            else -> error("Unexpected element of listConstructor: $element")
+        }
+    }
+    return result
+}
+
+internal fun If (condition: Boolean, vararg elements: Any): List<String> = 
+    if (condition) listConstructor(*elements) else emptyList()
+
+

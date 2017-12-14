@@ -16,12 +16,13 @@
 
 package org.jetbrains.kotlin.konan.target
 
-enum class Family(name:String, val exeSuffix:String) {
-    OSX("osx", "kexe"),
-    LINUX("linux", "kexe"),
-    WINDOWS("windows", "exe"),
-    ANDROID("android", "so"),
-    WASM("wasm", "wasm")
+enum class Family(name:String, val exeSuffix:String, val dynamicPrefix: String, val dynamicSuffix: String) {
+    OSX(    "osx"    , "kexe", "lib", "dylib"),
+    IOS(    "ios"    , "kexe", "lib", "dylib"),
+    LINUX(  "linux"  , "kexe", "lib", "so"   ),
+    WINDOWS("windows", "exe" , ""   , "dll"  ),
+    ANDROID("android", "so"  , "lib", "so"   ),
+    WASM(   "wasm"   , "wasm", ""   , "wasm" )
 }
 
 enum class Architecture(val bitness: Int) {
@@ -39,8 +40,8 @@ enum class Architecture(val bitness: Int) {
 enum class KonanTarget(val family: Family, val architecture: Architecture, val detailedName: String, var enabled: Boolean = false) {
     ANDROID_ARM32(  Family.ANDROID,     Architecture.ARM32,     "android_arm32"),
     ANDROID_ARM64(  Family.ANDROID,     Architecture.ARM64,     "android_arm64"),
-    IPHONE(         Family.OSX,         Architecture.ARM32,     "ios"),
-    IPHONE_SIM(     Family.OSX,         Architecture.X64,       "ios_sim"),
+    IPHONE(         Family.IOS,         Architecture.ARM64,     "ios"),
+    IPHONE_SIM(     Family.IOS,         Architecture.X64,       "ios_sim"),
     LINUX(          Family.LINUX,       Architecture.X64,       "linux"),
     MINGW(          Family.WINDOWS,     Architecture.X64,       "mingw"),
     MACBOOK(        Family.OSX,         Architecture.X64,       "osx"),
@@ -59,14 +60,22 @@ enum class CompilerOutputKind {
     PROGRAM {
         override fun suffix(target: KonanTarget?) = ".${target!!.family.exeSuffix}"
     },
+    DYNAMIC {
+        override fun suffix(target: KonanTarget?) = ".${target!!.family.dynamicSuffix}"
+        override fun prefix(target: KonanTarget?) = "${target!!.family.dynamicPrefix}"
+    },
+    FRAMEWORK {
+        override fun suffix(target: KonanTarget?): String = ".framework"
+    },
     LIBRARY {
         override fun suffix(target: KonanTarget?) = ".klib"
-    } ,
+    },
     BITCODE {
         override fun suffix(target: KonanTarget?) = ".bc"
     };
 
     abstract fun suffix(target: KonanTarget? = null): String
+    open fun prefix(target: KonanTarget? = null): String = ""
 }
 
 class TargetManager(val userRequest: String? = null) {
@@ -167,9 +176,11 @@ class TargetManager(val userRequest: String? = null) {
                     KonanTarget.LINUX_MIPSEL32.enabled = true
                     KonanTarget.ANDROID_ARM32.enabled = true
                     KonanTarget.ANDROID_ARM64.enabled = true
+                    KonanTarget.WASM32.enabled = true
                 }
                 KonanTarget.MINGW -> {
                     KonanTarget.MINGW.enabled = true
+                    KonanTarget.WASM32.enabled = true
                 }
                 KonanTarget.MACBOOK -> {
                     KonanTarget.MACBOOK.enabled = true

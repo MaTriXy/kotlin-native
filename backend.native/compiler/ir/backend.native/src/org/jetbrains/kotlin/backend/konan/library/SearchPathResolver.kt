@@ -34,46 +34,84 @@ fun defaultResolver(repositories: List<String>, targetManager: TargetManager): S
         defaultResolver(repositories, Distribution(targetManager))
 
 fun defaultResolver(repositories: List<String>, distribution: Distribution): SearchPathResolver =
-        KonanLibrarySearchPathResolver(repositories, distribution.klib, distribution.localKonanDir)
+        KonanLibrarySearchPathResolver(
+                repositories,
+                distribution.targetManager,
+                distribution.klib,
+                distribution.localKonanDir
+        )
 
 fun SearchPathResolver.resolveImmediateLibraries(libraryNames: List<String>,
                                                  target: KonanTarget,
                                                  abiVersion: Int = 1,
                                                  noStdLib: Boolean = false,
                                                  noDefaultLibs: Boolean = false,
-                                                 removeDuplicates: Boolean = true): List<LibraryReaderImpl> {
-
-    val defaultLibraries = defaultLinks(noStdLib, noDefaultLibs).map {
-        LibraryReaderImpl(it, abiVersion, target, isDefaultLink = true)
-    }
-
+                                                 logger: ((String) -> Unit)?): List<LibraryReaderImpl> {
     val userProvidedLibraries = libraryNames
             .map { resolve(it) }
             .map{ LibraryReaderImpl(it, abiVersion, target) }
 
-    val resolvedLibraries = defaultLibraries + userProvidedLibraries
+    val defaultLibraries = defaultLinks(nostdlib = noStdLib, noDefaultLibs = noDefaultLibs).map {
+        LibraryReaderImpl(it, abiVersion, target, isDefaultLibrary = true)
+    }
 
-    return resolvedLibraries.let {
-        if (removeDuplicates) it.distinctBy { it.libraryFile.absolutePath } else it
+    // Make sure the user provided ones appear first, so that 
+    // they have precedence over defaults when duplicates are eliminated.
+    val resolvedLibraries = userProvidedLibraries + defaultLibraries
+
+    warnOnLibraryDuplicates(resolvedLibraries.map { it.libraryFile }, logger)
+
+    return resolvedLibraries.distinctBy { it.libraryFile.absolutePath }
+}
+
+private fun warnOnLibraryDuplicates(resolvedLibraries: List<File>, 
+    logger: ((String) -> Unit)? ) {
+
+    if (logger == null) return
+
+    val duplicates = resolvedLibraries.groupBy { it.absolutePath } .values.filter { it.size > 1 }
+
+    duplicates.forEach {
+        logger("library included more than once: ${it.first().absolutePath}")
     }
 }
 
 fun SearchPathResolver.resolveLibrariesRecursive(immediateLibraries: List<LibraryReaderImpl>,
                                                  target: KonanTarget,
-                                                 abiVersion: Int): List<LibraryReaderImpl> {
-    val result = mutableMapOf<File, LibraryReaderImpl>()
-    result.putAll(immediateLibraries.map { it.libraryFile.absoluteFile to it })
-    var newDependencies: Map<File, LibraryReaderImpl> = result
+                                                 abiVersion: Int) {
+    val cache = mutableMapOf<File, LibraryReaderImpl>()
+    cache.putAll(immediateLibraries.map { it.libraryFile.absoluteFile to it })
+    var newDependencies = cache.values.toList()
     do {
-        newDependencies = newDependencies.values.asSequence()
-                .flatMap { it.dependencies.asSequence() }
-                .map { resolve(it).absoluteFile }
-                .filter { it !in result }
-                .map { it to LibraryReaderImpl(it, abiVersion, target) }.toMap()
-
-        result.putAll(newDependencies)
+        newDependencies = newDependencies.map { library: LibraryReaderImpl ->
+            library.unresolvedDependencies
+                    .map { resolve(it).absoluteFile }
+                    .map { 
+                        if (it in cache) {
+                            library.resolvedDependencies.add(cache[it]!!)
+                            null
+                        } else {
+                            val reader = LibraryReaderImpl(it, abiVersion, target)
+                            cache.put(it,reader)
+                            library.resolvedDependencies.add(reader) 
+                            reader
+                        }
+            }.filterNotNull()
+        } .flatten()
     } while (newDependencies.isNotEmpty())
-    return result.values.toList()
+}
+
+fun List<LibraryReaderImpl>.withResolvedDependencies(): List<LibraryReaderImpl> {
+    val result = mutableSetOf<LibraryReaderImpl>()
+    result.addAll(this)
+    var newDependencies = result.toList()
+    do {
+        newDependencies = newDependencies
+            .map { it -> it.resolvedDependencies } .flatten()
+            .filter { it !in result }
+        result.addAll(newDependencies)
+    } while (newDependencies.isNotEmpty())
+    return result.toList()
 }
 
 fun SearchPathResolver.resolveLibrariesRecursive(libraryNames: List<String>,
@@ -81,20 +119,34 @@ fun SearchPathResolver.resolveLibrariesRecursive(libraryNames: List<String>,
                                                  abiVersion: Int = 1,
                                                  noStdLib: Boolean = false,
                                                  noDefaultLibs: Boolean = false): List<LibraryReaderImpl> {
-    return resolveLibrariesRecursive(
-            resolveImmediateLibraries(libraryNames, target, abiVersion, noStdLib, noDefaultLibs, true),
-            target, abiVersion
-    )
+    val immediateLibraries = resolveImmediateLibraries(
+                    libraryNames = libraryNames,
+                    target = target,
+                    abiVersion = abiVersion,
+                    noStdLib = noStdLib,
+                    noDefaultLibs = noDefaultLibs,
+                    logger = null
+            )
+    resolveLibrariesRecursive(immediateLibraries, target, abiVersion)
+    return immediateLibraries.withResolvedDependencies()
 }
 
-class KonanLibrarySearchPathResolver(repositories: List<String>,
-    val distributionKlib: String?, val localKonanDir: String?, val skipCurrentDir: Boolean = false): SearchPathResolver {
+class KonanLibrarySearchPathResolver(
+        repositories: List<String>,
+        val targetManager: TargetManager?,
+        val distributionKlib: String?,
+        val localKonanDir: String?,
+        val skipCurrentDir: Boolean = false
+): SearchPathResolver {
 
     val localHead: File?
         get() = localKonanDir?.File()?.klib
 
     val distHead: File?
-        get() = distributionKlib?.File()
+        get() = distributionKlib?.File()?.child("common")
+
+    val distPlatformHead: File?
+        get() = targetManager?.let { distributionKlib?.File()?.child("platform")?.child(targetManager.targetName) }
 
     val currentDirHead: File?
         get() = if (!skipCurrentDir) File.userDir else null
@@ -105,7 +157,7 @@ class KonanLibrarySearchPathResolver(repositories: List<String>,
 
     // This is the place where we specify the order of library search.
     override val searchRoots: List<File> by lazy {
-        (listOf(currentDirHead) + repoRoots + listOf(localHead, distHead)).filterNotNull()
+        (listOf(currentDirHead) + repoRoots + listOf(localHead, distHead, distPlatformHead)).filterNotNull()
     }
 
     private fun found(candidate: File): File? {
@@ -137,11 +189,13 @@ class KonanLibrarySearchPathResolver(repositories: List<String>,
         get() = File(this, "klib")
 
     // The libraries from the default root are linked automatically.
-    val defaultRoot: File?
-        get() = if (distHead?.exists ?: false) distHead else null
+    val defaultRoots: List<File>
+        get() = listOf(distHead, distPlatformHead)
+                .filterNotNull()
+                .filter{ it.exists }
 
     override fun defaultLinks(nostdlib: Boolean, noDefaultLibs: Boolean): List<File> {
-        val defaultLibs = defaultRoot?.listFiles.orEmpty()
+        val defaultLibs = defaultRoots.flatMap{ it.listFiles }
             .filterNot { it.name.removeSuffixIfPresent(".klib") == "stdlib" }
             .map { File(it.absolutePath) }
         val result = mutableListOf<File>()

@@ -39,25 +39,6 @@ apply plugin: 'com.jfrog.bintray'
 group = 'org.jetbrains.kotlin'
 version = konanVersion
 
-// TODO: move this code to top level (the same for backend.native)
-// Copied from backend.native
-allprojects {
-    repositories {
-        maven { url kotlinCompilerRepo }
-    }
-
-    configurations.all {
-        // kotlin-compiler module includes Kotlin runtime bundled;
-        // make Gradle aware of this to avoid multiple Kotlin runtimes in classpath:
-        resolutionStrategy.dependencySubstitution {
-            substitute module('org.jetbrains.kotlin:kotlin-runtime') with module(kotlinCompilerModule)
-            substitute module('org.jetbrains.kotlin:kotlin-stdlib')  with module(kotlinCompilerModule)
-            substitute module('org.jetbrains.kotlin:kotlin-reflect') with module(kotlinCompilerModule)
-        }
-        // TODO: probably we should use kotlin-compiler without bundled runtime
-    }
-}
-
 repositories {
     mavenCentral()
 }
@@ -80,7 +61,7 @@ task pluginMetadata {
 
 dependencies {
     compile project(':shared')
-    compile "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
+    compile "org.jetbrains.kotlin:kotlin-stdlib:$buildKotlinVersion"
     compile gradleApi()
 
     testCompile gradleTestKit()
@@ -92,9 +73,17 @@ dependencies {
 }
 
 test {
-    dependsOn ':cross_dist'
+    if (project.hasProperty("konan.home")) {
+        systemProperty("konan.home", project.property("konan.home"))
+    } else {
+        dependsOn ':dist'
+        systemProperty("konan.home", distDir.absolutePath)
+    }
+    // Uncomment for debugging.
     //testLogging.showStandardStreams = true
-    systemProperty("konan.home", rootProject.file('dist').canonicalPath)
+    if (project.hasProperty("maxParallelForks")) {
+        maxParallelForks=project.property("maxParallelForks")
+    }
 }
 
 jar {
@@ -103,6 +92,7 @@ jar {
 
 processResources {
     expand('konanVersion': konanVersion)
+    from(rootProject.project(':utilities').file('env_blacklist'))
 }
 
 publishing {
@@ -113,7 +103,7 @@ publishing {
                 def stdlibDep = xml.asNode().appendNode("dependencies").appendNode("dependency")
                 stdlibDep.appendNode("groupId", "org.jetbrains.kotlin")
                 stdlibDep.appendNode("artifactId", "kotlin-stdlib")
-                stdlibDep.appendNode("version", "$kotlin_version")
+                stdlibDep.appendNode("version", "$buildKotlinVersion")
             }
         }
     }

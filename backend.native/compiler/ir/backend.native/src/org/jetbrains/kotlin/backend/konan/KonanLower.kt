@@ -57,6 +57,10 @@ internal class KonanLower(val context: Context) {
             FunctionInlining(context).inline(irModule)
         }
 
+        phaser.phase(KonanPhase.LOWER_AFTER_INLINE) {
+            irModule.files.forEach(PostInlineLowering(context)::lower)
+        }
+
         phaser.phase(KonanPhase.LOWER_INTEROP_PART1) {
             irModule.files.forEach(InteropLoweringPart1(context)::lower)
         }
@@ -128,6 +132,7 @@ internal class KonanLower(val context: Context) {
         }
         phaser.phase(KonanPhase.BRIDGES_BUILDING) {
             BridgesBuilding(context).runOnFilePostfix(irFile)
+            WorkersBridgesBuilding(context).lower(irFile)
         }
         phaser.phase(KonanPhase.AUTOBOX) {
             validateIrFile(context, irFile)

@@ -19,6 +19,7 @@ package org.jetbrains.kotlin.backend.konan
 import org.jetbrains.kotlin.backend.konan.descriptors.ClassifierAliasingPackageFragmentDescriptor
 import org.jetbrains.kotlin.backend.konan.descriptors.ExportedForwardDeclarationsPackageFragmentDescriptor
 import org.jetbrains.kotlin.backend.konan.library.KonanLibraryReader
+import org.jetbrains.kotlin.backend.konan.serialization.KonanPackageFragment
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
 import org.jetbrains.kotlin.descriptors.ModuleDescriptor
 import org.jetbrains.kotlin.descriptors.PackageFragmentDescriptor
@@ -33,12 +34,14 @@ import org.jetbrains.kotlin.util.OperatorNameConventions
 interface InteropLibrary {
     fun createSyntheticPackages(
             module: ModuleDescriptor,
-            kotlinPackageFragments: List<PackageFragmentDescriptor>
+            konanPackageFragments: List<KonanPackageFragment>
     ): List<PackageFragmentDescriptor>
 }
 
 fun createInteropLibrary(reader: KonanLibraryReader): InteropLibrary? {
-    val pkg = reader.manifestProperties.getProperty("pkg") ?: return null
+    if (reader.manifestProperties.getProperty("interop") != "true") return null
+    val pkg = reader.manifestProperties.getProperty("package") 
+        ?: error("Inconsistent manifest: interop library ${reader.libraryName} should have `package` specified")
     val exportForwardDeclarations = reader.manifestProperties
             .getProperty("exportForwardDeclarations").split(' ')
             .map { it.trim() }.filter { it.isNotEmpty() }
@@ -211,9 +214,9 @@ private class InteropLibraryImpl(
 ) : InteropLibrary {
     override fun createSyntheticPackages(
             module: ModuleDescriptor,
-            kotlinPackageFragments: List<PackageFragmentDescriptor>
+            konanPackageFragments: List<KonanPackageFragment>
     ): List<PackageFragmentDescriptor> {
-        val interopPackageFragments = kotlinPackageFragments.filter { it.fqName == packageFqName }
+        val interopPackageFragments = konanPackageFragments.filter { it.fqName == packageFqName }
 
         val fqNames = InteropBuiltIns.FqNames
 

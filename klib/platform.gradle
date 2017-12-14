@@ -1,32 +1,46 @@
 apply plugin: 'konan'
 
 buildscript {
+
+    def konanVersion = gradle.startParameter.projectProperties['konanVersion']
+
     dependencies {
-        classpath files(project.file('../tools/kotlin-native-gradle-plugin/build/libs').listFiles().findAll {
-            it.name.endsWith('.jar')
-        }.collect().first().absolutePath)
+        classpath files("../tools/kotlin-native-gradle-plugin/build/libs/kotlin-native-gradle-plugin-${konanVersion}.jar")
     }
 }
 
 def taskName = "${gradle.startParameter.projectProperties['name']}"
+String konanHome = gradle.startParameter.projectProperties['konan.home']
+List<String> libs = gradle.startParameter.projectProperties.libraries.split(" ").findAll { !it.isEmpty() }
+String targetName = gradle.startParameter.projectProperties.target
 
-konanInterop {
-    "$taskName" {
+konan.targets = [targetName]
+
+konanArtifacts {
+    interop("$taskName") {
         defFile gradle.startParameter.projectProperties.defFile
-        pkg gradle.startParameter.projectProperties.name
-        target gradle.startParameter.projectProperties.target
         noDefaultLibs true
+        libraries {
+            files libs.collect { "$konanHome/klib/platform/$targetName/$it" }
+        }
+        extraOpts '--purge_user_libs'
     }
 }
 
 def suffix = gradle.startParameter.projectProperties['suffix']
-def klibProgram = suffix?"${gradle.startParameter.projectProperties['konan.home']}/bin/klib.$suffix" : "${gradle.startParameter.projectProperties['konan.home']}/bin/klib"
+def klibProgram = suffix?"$konanHome/bin/klib.$suffix" : "$konanHome/bin/klib"
 
 task klibInstall(type:Exec) {
-    dependsOn konanInterop["$taskName"].interopProcessingTask
+    String repo = "$konanHome/klib/platform/$targetName"
+    doFirst {
+        new File(repo).mkdirs()
+    }
+
+    dependsOn konanArtifacts."$taskName"."$targetName"
     commandLine klibProgram,
             'install',
-            konanInterop["$taskName"].interopProcessingTask.klib,
+            konanArtifacts."$taskName"."$targetName".artifact,
+            '-target', gradle.startParameter.projectProperties.target,
             '-repository',
-            "${gradle.startParameter.projectProperties['konan.home']}/klib"
+            repo
 }

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 
 DIR=$(cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd )
-PATH=$DIR/../../dist/bin:$DIR/../../bin:$PATH
+
+source "$DIR/../konan.sh"
 
 SUFFIX=kexe
 if [ x$TARGET == x ]; then
@@ -22,7 +23,7 @@ COMPILER_ARGS=${!var} # add -opt for an optimized build.
 
 mkdir -p $DIR/build/bin/
 
-konanc $COMPILER_ARGS -target $TARGET $DIR/Workers.kt \
+konanc $COMPILER_ARGS -target $TARGET $DIR/src/main/kotlin/Workers.kt \
        -o $DIR/build/bin/Workers || exit 1
 
 echo "Artifact could be found at $DIR/build/bin/Workers.$SUFFIX"

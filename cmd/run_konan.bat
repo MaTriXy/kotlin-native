@@ -38,10 +38,6 @@ if not "!ARG!" == "" (
         set "JAVA_ARGS=%JAVA_ARGS% !ARG:~2!"
         goto next
     )
-    if "!ARG:~0,2!" == "-X" (
-        echo "TODO: need to pass arguments to all the tools somehow."
-        goto next
-    )
     if "!ARG!" == "--time" (
         set "KONAN_ARGS=%KONAN_ARGS% --time"
         set "JAVA_ARGS=%JAVA_ARGS% -agentlib:hprof=cpu=samples -Dkonan.profile=true"
@@ -64,10 +60,13 @@ set "INTEROP_RUNTIME_JAR=%KONAN_LIB%\Runtime.jar"
 set "KLIB_JAR=%KONAN_LIB%\klib.jar"
 set "KONAN_JAR=%KONAN_LIB%\backend.native.jar"
 set "KOTLIN_JAR=%KONAN_LIB%\kotlin-compiler.jar"
+set "KOTLIN_STDLIB_JAR=%KONAN_LIB%\kotlin-stdlib.jar"
+set "KOTLIN_REFLECT_JAR=%KONAN_LIB%\kotlin-stdlib.jar"
+set "KOTLIN_SCRIPT_RUNTIME_JAR=%KONAN_LIB%\kotlin-script-runtime.jar"
 set "STUB_GENERATOR_JAR=%KONAN_LIB%\StubGenerator.jar"
 set "UTILITIES_JAR=%KONAN_LIB%\utilities.jar"
 
-set "KONAN_CLASSPATH=%KOTLIN_JAR%;%INTEROP_RUNTIME_JAR%;%KONAN_JAR%;%STUB_GENERATOR_JAR%;%INTEROP_INDEXER_JAR%;%SHARED_JAR%;%KLIB_JAR%;%UTILITIES_JAR%"
+set "KONAN_CLASSPATH=%KOTLIN_JAR%;%KOTLIN_STDLIB_JAR%;%KOTLIN_REFLECT_JAR%;%KOTLIN_SCRIPT_RUNTIME_JAR%;%INTEROP_RUNTIME_JAR%;%KONAN_JAR%;%STUB_GENERATOR_JAR%;%INTEROP_INDEXER_JAR%;%SHARED_JAR%;%KLIB_JAR%;%UTILITIES_JAR%"
 
 set JAVA_OPTS=-ea ^
     -Xmx3G ^
@@ -94,9 +93,8 @@ goto :eof
 :set_path
   rem libclang.dll is dynamically linked and thus requires correct PATH to be loaded.
   rem TODO: remove this hack.
-  set "PATH=%_KONAN_HOME%\dependencies\msys2-mingw-w64-x86_64-gcc-6.3.0-clang-llvm-3.9.1-windows-x86-64\bin;%PATH%"
+  set "PATH=%HOME%\.konan\dependencies\msys2-mingw-w64-x86_64-gcc-7.2.0-clang-llvm-5.0.0-windows-x86-64\bin;%PATH%"
 goto :eof
 
 :end
 endlocal
-
