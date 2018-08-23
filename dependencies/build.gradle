@@ -16,130 +16,31 @@
 
 
 import groovy.transform.stc.ClosureParams
-import groovy.transform.stc.ClosureSignatureHint
-import groovy.transform.stc.FirstParam
 import groovy.transform.stc.FromString
 import org.jetbrains.kotlin.konan.target.*
 import org.jetbrains.kotlin.konan.util.DependencyProcessor
 import static org.jetbrains.kotlin.konan.target.KonanTarget.*
-import org.jetbrains.kotlin.konan.properties.KonanProperties
-import org.jetbrains.kotlin.konan.properties.*
+import org.jetbrains.kotlin.konan.util.Named
+import org.jetbrains.kotlin.konan.properties.KonanPropertiesLoader
+import org.jetbrains.kotlin.konan.target.ConfigurablesImplKt
+import org.jetbrains.kotlin.konan.target.KonanTarget
+import org.jetbrains.kotlin.konan.target.TargetManager
+import org.jetbrains.kotlin.konan.util.DependencyProcessor
+
+import static org.jetbrains.kotlin.konan.util.VisibleNamedKt.getVisibleName
 
 buildscript {
     apply from: "$rootDir/gradle/kotlinGradlePlugin.gradle"
 
     repositories {
-        jcenter()
+        maven {
+            url = 'https://cache-redirector.jetbrains.com/jcenter'
+        }
     }
-}
-
-configurations {
-    kotlin_compiler_jar
-    kotlin_compiler_pom
-    kotlin_compiler_src
-    kotlin_compiler_doc
-
-    kotlin_gradle_plugin_jar
-    kotlin_gradle_plugin_pom
-    kotlin_gradle_plugin_src
-    kotlin_gradle_plugin_doc
-
-    kotlin_stdlib_jdk8_jar
-    kotlin_stdlib_jdk8_pom
-    kotlin_stdlib_jdk8_src
-    kotlin_stdlib_jdk8_doc
-
-    kotlin_stdlib_jar
-    kotlin_stdlib_pom
-    kotlin_stdlib_src
-    kotlin_stdlib_doc
-
-    kotlin_reflect_jar
-    kotlin_reflect_pom
-    kotlin_reflect_src
-    kotlin_reflect_doc
-
-    kotlin_script_runtime_jar
-    kotlin_script_runtime_pom
-    kotlin_script_runtime_src
-    kotlin_script_runtime_doc
-
-}
-
-def kotlinGradleModule = "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinGradlePluginVersion"
-def kotlinStdLibJdk8Module = "org.jetbrains.kotlin:kotlin-stdlib-jre8:$kotlinStdLibJdk8Version"
-
-// TODO: Check if we really need the our bintray mirror and delete the uploading code below if we don't.
-repositories {
-    maven { url kotlinCompilerRepo }
-}
-
-dependencies {
-    kotlin_compiler_jar "$kotlinCompilerModule@jar"
-    kotlin_compiler_pom "$kotlinCompilerModule@pom"
-    kotlin_compiler_src "$kotlinCompilerModule:sources@jar"
-    kotlin_compiler_doc "$kotlinCompilerModule:javadoc@jar"
-
-    kotlin_gradle_plugin_jar "$kotlinGradleModule@jar"
-    kotlin_gradle_plugin_pom "$kotlinGradleModule@pom"
-    kotlin_gradle_plugin_src "$kotlinGradleModule:sources@jar"
-    kotlin_gradle_plugin_doc "$kotlinGradleModule:javadoc@jar"
-
-    kotlin_stdlib_jdk8_jar "$kotlinStdLibJdk8Module@jar"
-    kotlin_stdlib_jdk8_pom "$kotlinStdLibJdk8Module@pom"
-    kotlin_stdlib_jdk8_src "$kotlinStdLibJdk8Module:sources@jar"
-    kotlin_stdlib_jdk8_doc "$kotlinStdLibJdk8Module:javadoc@jar"
-
-    kotlin_stdlib_jar "$kotlinStdLibModule@jar"
-    kotlin_stdlib_pom "$kotlinStdLibModule@pom"
-    kotlin_stdlib_src "$kotlinStdLibModule:sources@jar"
-    kotlin_stdlib_doc "$kotlinStdLibModule:javadoc@jar"
-
-    kotlin_reflect_jar "$kotlinReflectModule@jar"
-    kotlin_reflect_pom "$kotlinReflectModule@pom"
-    kotlin_reflect_src "$kotlinReflectModule:sources@jar"
-    kotlin_reflect_doc "$kotlinReflectModule:javadoc@jar"
-
-    kotlin_script_runtime_jar "$kotlinScriptRuntimeModule@jar"
-    kotlin_script_runtime_pom "$kotlinScriptRuntimeModule@pom"
-    kotlin_script_runtime_src "$kotlinScriptRuntimeModule:sources@jar"
-    kotlin_script_runtime_doc "$kotlinScriptRuntimeModule:javadoc@jar"
-}
-
-def modules = ['compiler'      : kotlinCompilerModule,
-               'gradle_plugin' : kotlinGradleModule,
-               'stdlib_jdk8'   : kotlinStdLibJdk8Module,
-               'stdlib'        : kotlinStdLibModule,
-               'reflect'       : kotlinReflectModule,
-               'script_runtime': kotlinScriptRuntimeModule
-]
-def uploads = modules.keySet()
-uploads.each { target ->
-    task("${target}Upload", type:GradleBuild) {
-        tasks = ['bintrayUpload']
-        buildFile project.file("upload.gradle")
-        dir project.projectDir
-        startParameter.projectProperties = [
-                'user'    :  "${project.hasProperty('bintrayUser') ? project['bintrayUser'] : System.getenv('BINTRAY_USER')}",
-                'key'     : "${ project.hasProperty('bintrayKey') ? project.property('bintrayKey') : System.getenv('BINTRAY_KEY')}",
-                'module'  : modules["${target}"],
-                'jar'     : project.configurations.getByName("kotlin_${target}_jar").files.collect {it.path},
-                'src'     : project.configurations.getByName("kotlin_${target}_src").files.collect {it.path},
-                'doc'     : project.configurations.getByName("kotlin_${target}_doc").files.collect {it.path},
-                'pom'     : project.configurations.getByName("kotlin_${target}_pom").files.collect {it.path},
-                'override': project.hasProperty("override") && project["override"]
-
-        ]
-    }
-}
-
-task update_kotlin_compiler(type: DefaultTask) {
-    dependsOn uploads.collect{"${it}Upload"}
 }
 
 abstract class NativeDep extends DefaultTask {
-    protected final String hostSystem = TargetManager.longerSystemName();
-    String baseUrl = "https://jetbrains.bintray.com/kotlin-native-dependencies"
+    static final String baseUrl = "https://cache-redirector.jetbrains.com/download.jetbrains.com/kotlin/native"
 
     @Input
     abstract String getFileName()
@@ -197,11 +98,11 @@ class TgzNativeDep extends NativeDep {
 
 class HelperNativeDep extends TgzNativeDep {
 
-    Properties konanProperties = new Properties()
+    KonanPropertiesLoader konanPropertiesLoader = null
 
     @TaskAction
     public void downloadAndExtract() {
-        def downloader = new DependencyProcessor(baseOutDir, konanProperties, [baseName], baseUrl, false)
+        def downloader = new DependencyProcessor(baseOutDir, konanPropertiesLoader, baseUrl, false)
         downloader.showInfo = false
         downloader.run()
     }
@@ -209,16 +110,13 @@ class HelperNativeDep extends TgzNativeDep {
 
 enum DependencyKind {
     LLVM(            "llvm",            { it.llvmHome },       { "llvmDir" }        ),
-    GCC_TOOLCHAIN(   "gccToolchain",    { it.gccToolchain },   { "gccToolchainDir" }),
-    SYSROOT(         "sysroot",         { it.targetSysRoot }                        ),
-    LIBFFI(          "libffi",          { it.libffiDir }                            ),
-    TARGET_TOOLCHAIN("targetToolchain", { it.targetToolchain }                      )
+    LIBFFI(          "libffi",          { it.libffiDir }                            )
 
 
     DependencyKind(String name,
-            @ClosureParams(value = FromString.class, options = "KonanProperties") Closure<String> dirGetter,
+            @ClosureParams(value = FromString.class, options = "KonanPropertiesLoader") Closure<String> dirGetter,
             @ClosureParams(value = FromString.class, options = "KonanTarget") Closure<String> propertyNameGetter =
-                           {target -> "${target.userName}${name.capitalize()}Dir"}) {
+                           {target -> "${target.visibleName}${name.capitalize()}Dir"}) {
         this.name = name
         this.dirGetter = dirGetter
         this.propertyNameGetter = propertyNameGetter
@@ -228,7 +126,7 @@ enum DependencyKind {
     private Closure<String> dirGetter           // KonanProperties -> String
     private Closure<String> propertyNameGetter  // KonanTarget -> String
 
-    String getDirectory(KonanProperties properties) {
+    String getDirectory(KonanPropertiesLoader properties) {
         return dirGetter(properties)
     }
 
@@ -239,27 +137,32 @@ enum DependencyKind {
     String toString() { return name }
 }
 
-TargetManager.enabled.each { target ->
-    def konanProperties = new KonanProperties(target,
-            rootProject.ext.konanProperties,
-            rootProject.ext.dependenciesDir.canonicalPath
-    )
+def platformManager = rootProject.ext.platformManager
 
-    konanProperties.dependencies.each { dependency ->
+platformManager.enabled.each { target ->
+    def loader = platformManager.loader(target)
+    loader.dependencies.each { dependency ->
         if (tasks.findByName(dependency) == null) {
             task "${dependency}"(type: HelperNativeDep) {
                 baseName = dependency
-                it.konanProperties = rootProject.ext.konanProperties
+                it.konanPropertiesLoader = loader
             }
         }
     }
 
+    // Also resolves all dependencies:
+    final DependencyProcessor dependencyProcessor = new DependencyProcessor(
+            project.rootProject.ext.dependenciesDir,
+            loader.properties,
+            loader.dependencies,
+            HelperNativeDep.baseUrl,
+            false
+    )
+
     DependencyKind.values().each { kind ->
-        def dir = kind.getDirectory(konanProperties)
+        def dir = kind.getDirectory(loader)
         if (dir != null) {
-            def path = rootProject.ext.dependenciesDir.toPath()
-                    .resolve(dir).toFile()
-                    .canonicalPath
+            String path = dependencyProcessor.resolveRelative(dir).canonicalPath
             rootProject.ext.set(kind.getPropertyName(target), path)
         }
     }
@@ -270,5 +173,7 @@ task update(type: Copy) {
 }
 
 task rmDotKonan(type: Delete) {
-    delete "${System.getProperty("user.home")}/.konan"
+    def dir = System.getenv("KONAN_DATA_DIR") ?: "${System.getProperty("user.home")}/.konan"
+    delete dir
 }
+

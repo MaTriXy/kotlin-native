@@ -37,6 +37,8 @@ data class File constructor(internal val javaPath: Path) {
         get() = File(absolutePath)
     val name: String
         get() = javaPath.fileName.toString()
+    val extension: String
+        get() = name.substringAfterLast('.', "")
     val parent: String
         get() = javaPath.parent.toString()
     val parentFile: File
@@ -52,6 +54,8 @@ data class File constructor(internal val javaPath: Path) {
         get() = javaPath.isAbsolute()
     val listFiles: List<File>
         get() = Files.newDirectoryStream(javaPath).use { stream -> stream.map { File(it) } }
+    val listFilesOrEmpty: List<File>
+        get() = if (exists) listFiles else emptyList()
 
     fun child(name: String) = File(this, name)
 
@@ -118,6 +122,8 @@ data class File constructor(internal val javaPath: Path) {
         Files.write(javaPath, lines)
     }
 
+    fun writeText(text: String): Unit = writeLines(listOf(text))
+
     fun forEachLine(action: (String) -> Unit) {
         Files.lines(javaPath).use { lines ->
             lines.forEach { action(it) }
@@ -146,12 +152,19 @@ data class File constructor(internal val javaPath: Path) {
         val userHome
             get() = File(System.getProperty("user.home"))
 
-        val jdkHome
+        val javaHome
             get() = File(System.getProperty("java.home"))
-
+        val pathSeparator = java.io.File.pathSeparator
     }
 
     fun readStrings() = mutableListOf<String>().also { list -> forEachLine{list.add(it)}}
+
+    override fun equals(other: Any?): Boolean {
+        val otherFile = other as? File ?: return false
+        return otherFile.javaPath.toAbsolutePath() == javaPath.toAbsolutePath()
+    }
+
+    override fun hashCode() = javaPath.toAbsolutePath().hashCode()
 }
 
 fun String.File(): File = File(this)

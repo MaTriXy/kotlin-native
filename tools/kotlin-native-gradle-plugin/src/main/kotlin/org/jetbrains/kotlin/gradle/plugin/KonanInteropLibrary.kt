@@ -23,13 +23,18 @@ import org.gradle.api.file.FileCollection
 import org.gradle.api.internal.project.ProjectInternal
 import org.gradle.internal.reflect.Instantiator
 import org.gradle.util.ConfigureUtil
-import org.jetbrains.kotlin.gradle.plugin.tasks.KonanInteropTask
 import org.jetbrains.kotlin.gradle.plugin.KonanInteropSpec.IncludeDirectoriesSpec
+import org.jetbrains.kotlin.gradle.plugin.tasks.KonanInteropTask
 import org.jetbrains.kotlin.konan.target.KonanTarget
 import java.io.File
 
-open class KonanInteropLibrary(name: String, project: ProjectInternal, instantiator: Instantiator)
-    : KonanBuildingConfig<KonanInteropTask>(name, KonanInteropTask::class.java, project, instantiator), KonanInteropSpec {
+open class KonanInteropLibrary(name: String,
+                               project: ProjectInternal,
+                               instantiator: Instantiator,
+                               targets: Iterable<String> = project.konanExtension.targets
+) : KonanBuildingConfig<KonanInteropTask>(name, KonanInteropTask::class.java, project, instantiator, targets),
+    KonanInteropSpec
+{
 
     override fun generateTaskDescription(task: KonanInteropTask) =
             "Build the Kotlin/Native interop library '${task.name}' for target '${task.konanTarget}'"
@@ -37,8 +42,8 @@ open class KonanInteropLibrary(name: String, project: ProjectInternal, instantia
     override fun generateAggregateTaskDescription(task: Task) =
             "Build the Kotlin/Native interop library '${task.name}' for all supported and declared targets'"
 
-    override fun generateHostTaskDescription(task: Task, hostTarget: KonanTarget) =
-            "Build the Kotlin/Native interop library '${task.name}' for current host"
+    override fun generateTargetAliasTaskDescription(task: Task, targetName: String) =
+            "Build the Kotlin/Native interop library '${task.name}' for '$targetName'"
 
     override val defaultBaseDir: File
         get() = project.konanLibsBaseDir
@@ -79,5 +84,6 @@ open class KonanInteropLibrary(name: String, project: ProjectInternal, instantia
 
     override fun link(vararg files: Any) = forEach { it.link(*files) }
     override fun link(files: FileCollection) = forEach { it.link(files) }
+    override fun dependencies(closure: Closure<Unit>) = forEach { it.dependencies(closure) }
 
 }

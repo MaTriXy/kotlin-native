@@ -16,14 +16,9 @@
 
 package org.jetbrains.kotlin.backend.konan
 
-import org.jetbrains.kotlin.backend.konan.descriptors.ClassifierAliasingPackageFragmentDescriptor
-import org.jetbrains.kotlin.backend.konan.descriptors.ExportedForwardDeclarationsPackageFragmentDescriptor
-import org.jetbrains.kotlin.backend.konan.library.KonanLibraryReader
-import org.jetbrains.kotlin.backend.konan.serialization.KonanPackageFragment
+import org.jetbrains.kotlin.builtins.konan.KonanBuiltIns
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
-import org.jetbrains.kotlin.descriptors.ModuleDescriptor
-import org.jetbrains.kotlin.descriptors.PackageFragmentDescriptor
-import org.jetbrains.kotlin.descriptors.PropertyDescriptor
+import org.jetbrains.kotlin.descriptors.konan.interop.InteropFqNames
 import org.jetbrains.kotlin.incremental.components.NoLookupLocation
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
@@ -31,53 +26,15 @@ import org.jetbrains.kotlin.resolve.scopes.MemberScope
 import org.jetbrains.kotlin.types.TypeUtils
 import org.jetbrains.kotlin.util.OperatorNameConventions
 
-interface InteropLibrary {
-    fun createSyntheticPackages(
-            module: ModuleDescriptor,
-            konanPackageFragments: List<KonanPackageFragment>
-    ): List<PackageFragmentDescriptor>
-}
+internal class InteropBuiltIns(builtIns: KonanBuiltIns, vararg konanPrimitives: ClassDescriptor) {
 
-fun createInteropLibrary(reader: KonanLibraryReader): InteropLibrary? {
-    if (reader.manifestProperties.getProperty("interop") != "true") return null
-    val pkg = reader.manifestProperties.getProperty("package") 
-        ?: error("Inconsistent manifest: interop library ${reader.libraryName} should have `package` specified")
-    val exportForwardDeclarations = reader.manifestProperties
-            .getProperty("exportForwardDeclarations").split(' ')
-            .map { it.trim() }.filter { it.isNotEmpty() }
-            .map { FqName(it) }
-
-    return InteropLibraryImpl(FqName(pkg), exportForwardDeclarations)
-}
-
-private val cPointerName = "CPointer"
-private val nativePointedName = "NativePointed"
-
-internal class InteropBuiltIns(builtIns: KonanBuiltIns) {
-
-    object FqNames {
-        val packageName = FqName("kotlinx.cinterop")
-
-        val cPointer = packageName.child(Name.identifier(cPointerName)).toUnsafe()
-        val nativePointed = packageName.child(Name.identifier(nativePointedName)).toUnsafe()
-
-        val cNames = FqName("cnames")
-        val cNamesStructs = cNames.child(Name.identifier("structs"))
-
-        val objCNames = FqName("objcnames")
-        val objCNamesClasses = objCNames.child(Name.identifier("classes"))
-        val objCNamesProtocols = objCNames.child(Name.identifier("protocols"))
-    }
-
-    private val packageScope = builtIns.builtInsModule.getPackage(FqNames.packageName).memberScope
+    val packageScope = builtIns.builtInsModule.getPackage(InteropFqNames.packageName).memberScope
 
     val getPointerSize = packageScope.getContributedFunctions("getPointerSize").single()
 
-    val nullableInteropValueTypes = listOf(ValueType.C_POINTER, ValueType.NATIVE_POINTED)
+    val nativePointed = packageScope.getContributedClass(InteropFqNames.nativePointedName)
 
-    private val nativePointed = packageScope.getContributedClass(nativePointedName)
-
-    val cPointer = this.packageScope.getContributedClass(cPointerName)
+    val cPointer = this.packageScope.getContributedClass(InteropFqNames.cPointerName)
 
     val cPointerRawValue = cPointer.unsubstitutedMemberScope.getContributedVariables("rawValue").single()
 
@@ -104,11 +61,9 @@ internal class InteropBuiltIns(builtIns: KonanBuiltIns) {
 
     val nativeMemUtils = packageScope.getContributedClass("nativeMemUtils")
 
-    private val primitives = listOf(
-            builtIns.byte, builtIns.short, builtIns.int, builtIns.long,
-            builtIns.float, builtIns.double,
-            builtIns.nativePtr
-    )
+    private val primitives = arrayOf(
+            arrayOf(builtIns.byte, builtIns.short, builtIns.int, builtIns.long, builtIns.float, builtIns.double),
+            konanPrimitives).flatten()
 
     val readPrimitive = primitives.map {
         nativeMemUtils.unsubstitutedMemberScope.getContributedFunctions("get" + it.name).single()
@@ -124,7 +79,7 @@ internal class InteropBuiltIns(builtIns: KonanBuiltIns) {
 
     val staticCFunction = packageScope.getContributedFunctions("staticCFunction").toSet()
 
-    val workerPackageScope = builtIns.builtInsModule.getPackage(FqName("konan.worker")).memberScope
+    val workerPackageScope = builtIns.builtInsModule.getPackage(FqName("kotlin.native.worker")).memberScope
 
     val scheduleFunction = workerPackageScope.getContributedClass("Worker")
             .unsubstitutedMemberScope.getContributedFunctions("schedule").single()
@@ -161,27 +116,19 @@ internal class InteropBuiltIns(builtIns: KonanBuiltIns) {
     }.toMap()
 
     val objCObject = packageScope.getContributedClass("ObjCObject")
-    val objCPointerHolder = packageScope.getContributedClass("ObjCPointerHolder")
 
-    val objCPointerHolderValue = objCPointerHolder.unsubstitutedMemberScope
-            .getContributedDescriptors().filterIsInstance<PropertyDescriptor>().single()
-
-    val objCObjectInitFromPtr = packageScope.getContributedFunctions("initFromPtr").single()
+    val objCObjectBase = packageScope.getContributedClass("ObjCObjectBase")
 
     val allocObjCObject = packageScope.getContributedFunctions("allocObjCObject").single()
 
     val getObjCClass = packageScope.getContributedFunctions("getObjCClass").single()
 
-    val objCObjectRawPtr = packageScope.getContributedVariables("rawPtr").single {
-        val extensionReceiverType = it.extensionReceiverParameter?.type
-        extensionReceiverType != null && !extensionReceiverType.isMarkedNullable &&
-                TypeUtils.getClassDescriptor(extensionReceiverType) == objCObject
-    }
+    val objCObjectRawPtr = packageScope.getContributedFunctions("objcPtr").single()
 
     val getObjCReceiverOrSuper = packageScope.getContributedFunctions("getReceiverOrSuper").single()
 
     val getObjCMessenger = packageScope.getContributedFunctions("getMessenger").single()
-    val getObjCMessengerLU = packageScope.getContributedFunctions("getMessengerLU").single()
+    val getObjCMessengerStret = packageScope.getContributedFunctions("getMessengerStret").single()
 
     val interpretObjCPointerOrNull = packageScope.getContributedFunctions("interpretObjCPointerOrNull").single()
     val interpretObjCPointer = packageScope.getContributedFunctions("interpretObjCPointer").single()
@@ -193,9 +140,13 @@ internal class InteropBuiltIns(builtIns: KonanBuiltIns) {
 
     val objCOutlet = packageScope.getContributedClass("ObjCOutlet")
 
+    val objCOverrideInit = objCObjectBase.unsubstitutedMemberScope.getContributedClass("OverrideInit")
+
     val objCMethodImp = packageScope.getContributedClass("ObjCMethodImp")
 
     val exportObjCClass = packageScope.getContributedClass("ExportObjCClass")
+
+    val CreateNSStringFromKString = packageScope.getContributedFunctions("CreateNSStringFromKString").single()
 
 }
 
@@ -207,31 +158,3 @@ private fun MemberScope.getContributedClass(name: String): ClassDescriptor =
 
 private fun MemberScope.getContributedFunctions(name: String) =
         this.getContributedFunctions(Name.identifier(name), NoLookupLocation.FROM_BUILTINS)
-
-private class InteropLibraryImpl(
-        private val packageFqName: FqName,
-        private val exportForwardDeclarations: List<FqName>
-) : InteropLibrary {
-    override fun createSyntheticPackages(
-            module: ModuleDescriptor,
-            konanPackageFragments: List<KonanPackageFragment>
-    ): List<PackageFragmentDescriptor> {
-        val interopPackageFragments = konanPackageFragments.filter { it.fqName == packageFqName }
-
-        val fqNames = InteropBuiltIns.FqNames
-
-        val result = mutableListOf<PackageFragmentDescriptor>()
-
-        // Allow references to forwarding declarations to be resolved into classifiers declared in this library:
-        listOf(fqNames.cNamesStructs, fqNames.objCNamesClasses, fqNames.objCNamesProtocols).mapTo(result) { fqName ->
-            ClassifierAliasingPackageFragmentDescriptor(interopPackageFragments, module, fqName)
-        }
-        // TODO: use separate namespaces for structs, enums, Objective-C protocols etc.
-
-        result.add(ExportedForwardDeclarationsPackageFragmentDescriptor(
-                module, packageFqName, exportForwardDeclarations
-        ))
-
-        return result
-    }
-}

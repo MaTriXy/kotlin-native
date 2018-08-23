@@ -405,7 +405,7 @@ class StubGenerator(
 
                     out("var ${field.name.asSimpleName()}: $kotlinType")
 
-                    val signed = field.type.getUnderlyingIntegerType().isSigned
+                    val signed = field.type.isIntegerTypeSigned()
 
                     val readBitsExpr =
                             "readBits(this.rawPtr, ${field.offset}, ${field.size}, $signed).${rawType.convertor!!}()"
@@ -422,10 +422,11 @@ class StubGenerator(
         }
     }
 
-    private tailrec fun Type.getUnderlyingIntegerType(): IntegerType = when (this) {
-        is IntegerType -> this
-        is EnumType -> this.def.baseType.getUnderlyingIntegerType()
-        is Typedef -> this.def.aliased.getUnderlyingIntegerType()
+    private tailrec fun Type.isIntegerTypeSigned(): Boolean = when (this) {
+        is IntegerType -> this.isSigned
+        is BoolType -> false
+        is EnumType -> this.def.baseType.isIntegerTypeSigned()
+        is Typedef -> this.def.aliased.isIntegerTypeSigned()
         else -> error(this)
     }
 
@@ -760,13 +761,24 @@ class StubGenerator(
         val literal = when (constant) {
             is IntegerConstantDef -> integerLiteral(constant.type, constant.value) ?: return
             is FloatingConstantDef -> floatingLiteral(constant.type, constant.value) ?: return
+            is StringConstantDef -> constant.value.quoteAsKotlinLiteral()
             else -> {
                 // Not supported yet, ignore:
                 return
             }
         }
 
-        val kotlinType = mirror(constant.type).argType.render(kotlinFile)
+        val kotlinType = when (constant) {
+            is IntegerConstantDef,
+            is FloatingConstantDef -> mirror(constant.type).argType
+
+            is StringConstantDef -> KotlinTypes.string
+
+            else -> {
+                // Not supported yet, ignore:
+                return
+            }
+        }.render(kotlinFile)
 
         // TODO: improve value rendering.
 
@@ -775,7 +787,7 @@ class StubGenerator(
         // Also it provokes constant propagation which can reduce binary compatibility
         // when replacing interop stubs without recompiling the application.
 
-        out("val ${constant.name.asSimpleName()}: $kotlinType = $literal")
+        out("val ${constant.name.asSimpleName()}: $kotlinType get() = $literal")
     }
 
     private fun generateStubs(): List<KotlinStub> {
@@ -784,18 +796,18 @@ class StubGenerator(
         stubs.addAll(generateStubsForFunctions(functionsToBind))
 
         nativeIndex.objCProtocols.forEach {
-            if (!it.shouldBeImportedAsForwardDeclaration()) {
+            if (!it.isForwardDeclaration) {
                 stubs.add(ObjCProtocolStub(this, it))
             }
         }
 
         nativeIndex.objCClasses.forEach {
-            if (!it.shouldBeImportedAsForwardDeclaration()) {
+            if (!it.isForwardDeclaration && !it.isNSStringSubclass()) {
                 stubs.add(ObjCClassStub(this, it))
             }
         }
 
-        nativeIndex.objCCategories.mapTo(stubs) {
+        nativeIndex.objCCategories.filter { !it.clazz.isNSStringSubclass() }.mapTo(stubs) {
             ObjCCategoryStub(this, it)
         }
 
@@ -874,16 +886,24 @@ class StubGenerator(
                 add("MANY_INTERFACES_MEMBER_NOT_IMPLEMENTED") // Workaround for multiple-inherited properties.
                 add("EXTENSION_SHADOWED_BY_MEMBER") // For Objective-C categories represented as extensions.
                 add("REDUNDANT_NULLABLE") // This warning appears due to Obj-C typedef nullability incomplete support.
+                add("DEPRECATION") // For uncheckedCast.
             }
         }
 
         out("@file:Suppress(${suppress.joinToString { it.quoteAsKotlinLiteral() }})")
         if (pkgName != "") {
-            out("package $pkgName")
+            val packageName = pkgName.split(".").joinToString("."){
+                if(it.matches(VALID_PACKAGE_NAME_REGEX)){
+                    it
+                }else{
+                    "`$it`"
+                }
+            }
+            out("package $packageName")
             out("")
         }
         if (platform == KotlinPlatform.NATIVE) {
-            out("import konan.SymbolName")
+            out("import kotlin.native.SymbolName")
         }
         out("import kotlinx.cinterop.*")
 
@@ -891,6 +911,9 @@ class StubGenerator(
             out(it)
         }
 
+        out("")
+
+        out("// NOTE THIS FILE IS AUTO-GENERATED")
         out("")
 
         val context = object : StubGenerationContext {
@@ -923,13 +946,7 @@ class StubGenerator(
                 addAll(configuration.library.includes)
             },
 
-            compilerArgs = configuration.library.compilerArgs + when (platform) {
-                KotlinPlatform.JVM -> listOf("", "linux", "darwin", "win32").map {
-                    val javaHome = System.getProperty("java.home")
-                    "-I$javaHome/../include/$it"
-                }
-                KotlinPlatform.NATIVE -> emptyList()
-            },
+            compilerArgs = configuration.library.compilerArgs,
 
             additionalPreambleLines = configuration.library.additionalPreambleLines +
                     when (configuration.library.language) {
@@ -945,6 +962,9 @@ class StubGenerator(
         libraryForCStubs.preambleLines.forEach {
             out(it)
         }
+        out("")
+
+        out("// NOTE THIS FILE IS AUTO-GENERATED")
         out("")
 
         bridges.nativeLines.forEach {
@@ -976,11 +996,15 @@ class StubGenerator(
     }
 
     fun addManifestProperties(properties: Properties) {
-        properties["exportForwardDeclarations"] = nativeIndex.structs
+        val exportForwardDeclarations = configuration.exportForwardDeclarations.toMutableList()
+
+        nativeIndex.structs
                 .filter { it.def == null }
-                .joinToString(" ") {
+                .mapTo(exportForwardDeclarations) {
                     "$cnamesStructsPackageName.${it.kotlinName}"
                 }
+
+        properties["exportForwardDeclarations"] = exportForwardDeclarations.joinToString(" ")
 
         // TODO: consider exporting Objective-C class and protocol forward refs.
     }
@@ -1001,4 +1025,7 @@ class StubGenerator(
     val mappingBridgeGenerator: MappingBridgeGenerator =
             MappingBridgeGeneratorImpl(declarationMapper, simpleBridgeGenerator)
 
+    companion object {
+        private val VALID_PACKAGE_NAME_REGEX = "[a-zA-Z0-9_.]+".toRegex()
+    }
 }

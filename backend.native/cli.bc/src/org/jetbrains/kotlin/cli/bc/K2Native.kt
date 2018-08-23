@@ -20,49 +20,94 @@ import com.intellij.openapi.Disposable
 import org.jetbrains.annotations.NotNull
 import org.jetbrains.annotations.Nullable
 import org.jetbrains.kotlin.backend.konan.*
-import org.jetbrains.kotlin.backend.konan.util.profile
 import org.jetbrains.kotlin.cli.common.CLICompiler
 import org.jetbrains.kotlin.cli.common.CLITool
+import org.jetbrains.kotlin.cli.common.CommonCompilerPerformanceManager
 import org.jetbrains.kotlin.cli.common.ExitCode
+import org.jetbrains.kotlin.cli.common.config.addKotlinSourceRoots
+import org.jetbrains.kotlin.cli.common.config.kotlinSourceRoots
 import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity.ERROR
 import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity.WARNING
 import org.jetbrains.kotlin.cli.jvm.compiler.EnvironmentConfigFiles
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment
+import org.jetbrains.kotlin.cli.jvm.plugins.PluginCliParser
+import org.jetbrains.kotlin.config.CommonConfigurationKeys
 import org.jetbrains.kotlin.config.CompilerConfiguration
 import org.jetbrains.kotlin.config.Services
-import org.jetbrains.kotlin.config.addKotlinSourceRoots
-import org.jetbrains.kotlin.config.kotlinSourceRoots
+import org.jetbrains.kotlin.konan.KonanVersion
 import org.jetbrains.kotlin.konan.file.File
 import org.jetbrains.kotlin.konan.target.CompilerOutputKind
-import org.jetbrains.kotlin.konan.target.TargetManager
+import org.jetbrains.kotlin.konan.util.profile
+import org.jetbrains.kotlin.metadata.deserialization.BinaryVersion
+import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.utils.KotlinPaths
-import kotlin.reflect.KFunction
+import org.jetbrains.kotlin.serialization.konan.KonanMetadataVersion
 
+private class K2NativeCompilerPerformanceManager: CommonCompilerPerformanceManager("Kotlin to Native Compiler")
 class K2Native : CLICompiler<K2NativeCompilerArguments>() {
+    override fun createMetadataVersion(p0: IntArray): BinaryVersion = KonanMetadataVersion(*p0)
 
-    override fun doExecute(@NotNull arguments: K2NativeCompilerArguments, @NotNull configuration: CompilerConfiguration, @NotNull rootDisposable: Disposable, @Nullable paths: KotlinPaths?): ExitCode {
+    private val performanceManager by lazy {
+        K2NativeCompilerPerformanceManager()
+    }
+    override fun getPerformanceManager(): CommonCompilerPerformanceManager = performanceManager
 
-        if (arguments.freeArgs.isEmpty() && !arguments.isUsefulWithoutFreeArgs) {
-            configuration.report(ERROR, "You have not specified any compilation arguments. No output has been produced.")
+    override fun doExecute(@NotNull arguments: K2NativeCompilerArguments,
+                           @NotNull configuration: CompilerConfiguration,
+                           @NotNull rootDisposable: Disposable,
+                           @Nullable paths: KotlinPaths?): ExitCode {
+
+        if (arguments.version) {
+            println("Kotlin/Native: ${KonanVersion.CURRENT}")
+            return ExitCode.OK
         }
+
+        val pluginLoadResult =
+            PluginCliParser.loadPluginsSafe(arguments.pluginClasspaths, arguments.pluginOptions, configuration)
+        if (pluginLoadResult != ExitCode.OK) return pluginLoadResult
 
         val environment = KotlinCoreEnvironment.createForProduction(rootDisposable,
             configuration, EnvironmentConfigFiles.NATIVE_CONFIG_FILES)
         val project = environment.project
         val konanConfig = KonanConfig(project, configuration)
 
+        val enoughArguments = arguments.freeArgs.isNotEmpty() || arguments.isUsefulWithoutFreeArgs
+        if (!enoughArguments) {
+            configuration.report(ERROR, "You have not specified any compilation arguments. No output has been produced.")
+        }
+
+        /* Set default version of metadata version */
+        val metadataVersionString = arguments.metadataVersion
+        if (metadataVersionString == null) {
+            configuration.put(CommonConfigurationKeys.METADATA_VERSION, KonanMetadataVersion.INSTANCE)
+        }
+
+        if (konanConfig.linkOnly) {
+            configuration.report(WARNING, "You have not specified any source files. " +
+                    "Only libraries will be used to produce the output binary.")
+        }
+
         try {
             runTopLevelPhases(konanConfig, environment)
         } catch (e: KonanCompilationException) {
             return ExitCode.COMPILATION_ERROR
+        } catch (e: Throwable) {
+            configuration.report(ERROR, """
+                |Compilation failed: ${e.message}
+
+                | * Source files: ${environment.getSourceFiles().joinToString(transform = KtFile::getName)}
+                | * Compiler version info: Konan: ${KonanVersion.CURRENT} / Kotlin: ${KotlinVersion.CURRENT}
+                | * Output kind: ${configuration.get(KonanConfigKeys.PRODUCE)}
+
+                """.trimMargin())
+            throw e
         }
 
-        // TODO: catch Errors and IllegalStateException.
         return ExitCode.OK
     }
 
     val K2NativeCompilerArguments.isUsefulWithoutFreeArgs: Boolean
-        get() = this.listTargets || this.listPhases || this.checkDependencies
+        get() = this.listTargets || this.listPhases || this.checkDependencies || this.libraries?.isNotEmpty() ?: false
 
     fun Array<String>?.toNonNullList(): List<String> {
         return this?.asList<String>() ?: listOf<String>()
@@ -100,7 +145,7 @@ class K2Native : CLICompiler<K2NativeCompilerArguments>() {
                 // TODO: Collect all the explicit file names into an object
                 // and teach the compiler to work with temporaries and -save-temps.
 
-                arguments.outputName ?.let { put(OUTPUT, it) } 
+                arguments.outputName ?.let { put(OUTPUT, it) }
                 val outputKind = CompilerOutputKind.valueOf(
                     (arguments.produce ?: "program").toUpperCase())
                 put(PRODUCE, outputKind)
@@ -109,7 +154,7 @@ class K2Native : CLICompiler<K2NativeCompilerArguments>() {
                 arguments.mainPackage ?.let{ put(ENTRY, it) }
                 arguments.manifestFile ?.let{ put(MANIFEST_FILE, it) }
                 arguments.runtimeFile ?.let{ put(RUNTIME_FILE, it) }
-                arguments.propertyFile ?.let{ put(PROPERTY_FILE, it) }
+                arguments.temporaryFilesDir?.let { put(TEMPORARY_FILES_DIR, it) }
 
                 put(LIST_TARGETS, arguments.listTargets)
                 put(OPTIMIZATION, arguments.optimization)
@@ -146,6 +191,8 @@ class K2Native : CLICompiler<K2NativeCompilerArguments>() {
                     } else {
                         arguments.checkDependencies
                     })
+                if (arguments.friendModules != null)
+                    put(FRIEND_MODULES, arguments.friendModules!!.split(File.pathSeparator).filterNot(String::isEmpty))
             }
         }
     }

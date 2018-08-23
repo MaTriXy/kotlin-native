@@ -22,8 +22,6 @@
 #include <llvm/IR/Instruction.h>
 #include <llvm/Support/Casting.h>
 #include "DebugInfoC.h"
-
-
 /**
  * c++ --std=c++11 llvmDebugInfoC/src/DebugInfoC.cpp -IllvmDebugInfoC/include/ -Idependencies/all/clang+llvm-3.9.0-darwin-macos/include -Ldependencies/all/clang+llvm-3.9.0-darwin-macos/lib  -lLLVMCore -lLLVMSupport -lncurses -shared -o libLLVMDebugInfoC.dylib
  */
@@ -101,6 +99,15 @@ DISubprogramRef DICreateFunction(DIBuilderRef builder, DIScopeOpaqueRef scope,
                                                           isDefinition,
                                                           scopeLine));
 }
+
+DIScopeOpaqueRef DICreateLexicalBlockFile(DIBuilderRef builderRef, DIScopeOpaqueRef scopeRef, DIFileRef fileRef) {
+  return llvm::wrap(llvm::unwrap(builderRef)->createLexicalBlockFile(llvm::unwrap(scopeRef), llvm::unwrap(fileRef)));
+}
+
+DIScopeOpaqueRef DICreateLexicalBlock(DIBuilderRef builderRef, DIScopeOpaqueRef scopeRef, DIFileRef fileRef, int line, int column) {
+  return llvm::wrap(llvm::unwrap(builderRef)->createLexicalBlock(llvm::unwrap(scopeRef), llvm::unwrap(fileRef), line, column));
+}
+
 
 DICompositeTypeRef DICreateStructType(DIBuilderRef refBuilder,
                                       DIScopeOpaqueRef scope, const char *name,
@@ -202,7 +209,7 @@ void DIFunctionAddSubprogram(LLVMValueRef fn, DISubprogramRef sp) {
   auto dsp = llvm::cast<llvm::DISubprogram>(llvm::unwrap(sp));
   f->setSubprogram(dsp);
   if (!dsp->describes(f)) {
-    fprintf(stderr, "error!!! f:%s, sp:%s\n", f->getName(), dsp->getLinkageName());
+    fprintf(stderr, "error!!! f:%s, sp:%s\n", f->getName().str().c_str(), dsp->getLinkageName().str().c_str());
   }
 }
 
@@ -241,13 +248,20 @@ void DIInsertDeclaration(DIBuilderRef builder, LLVMValueRef value, DILocalVariab
                             llvm::unwrap(bb));
 }
 
-DILocationRef LLVMBuilderSetDebugLocation(LLVMBuilderRef builder, unsigned line,
+DILocationRef LLVMCreateLocation(LLVMContextRef contextRef, unsigned line,
                                  unsigned col, DIScopeOpaqueRef scope) {
-  auto sp = llvm::unwrap(scope);
-  auto llvmBuilder = llvm::unwrap(builder);
-  auto location = llvm::DILocation::get(llvmBuilder->getContext(), line, col, sp, nullptr);
-  llvmBuilder->SetCurrentDebugLocation(location);
+  auto location = llvm::DILocation::get(*llvm::unwrap(contextRef), line, col, llvm::unwrap(scope), nullptr);
   return llvm::wrap(location);
+}
+
+DILocationRef LLVMCreateLocationInlinedAt(LLVMContextRef contextRef, unsigned line,
+                                 unsigned col, DIScopeOpaqueRef scope, DILocationRef refLocationInlinedAt) {
+  auto location = llvm::DILocation::get(*llvm::unwrap(contextRef), line, col, llvm::unwrap(scope), llvm::unwrap(refLocationInlinedAt));
+  return llvm::wrap(location);
+}
+
+void LLVMBuilderSetDebugLocation(LLVMBuilderRef builder, DILocationRef refLocation) {
+  llvm::unwrap(builder)->SetCurrentDebugLocation(llvm::unwrap(refLocation));
 }
 
 void LLVMBuilderResetDebugLocation(LLVMBuilderRef builder) {
@@ -270,6 +284,5 @@ const char *DIGetSubprogramLinkName(DISubprogramRef sp) {
 int DISubprogramDescribesFunction(DISubprogramRef sp, LLVMValueRef fn) {
   return llvm::unwrap(sp)->describes(llvm::cast<llvm::Function>(llvm::unwrap(fn)));
 }
-
 } /* extern "C" */
 

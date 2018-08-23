@@ -16,52 +16,73 @@
 
 package org.jetbrains.kotlin.gradle.plugin.tasks
 
+import groovy.lang.Closure
+import org.codehaus.groovy.runtime.GStringImpl
+import org.gradle.api.file.ConfigurableFileTree
 import org.gradle.api.file.FileCollection
 import org.gradle.api.tasks.*
+import org.gradle.process.CommandLineArgumentProvider
 import org.jetbrains.kotlin.gradle.plugin.*
+import org.jetbrains.kotlin.gradle.plugin.model.KonanModelArtifact
+import org.jetbrains.kotlin.gradle.plugin.model.KonanModelArtifactImpl
+import org.jetbrains.kotlin.konan.library.defaultResolver
 import org.jetbrains.kotlin.konan.target.CompilerOutputKind
-
-enum class Produce(val cliOption: String, val kind: CompilerOutputKind) {
-    PROGRAM("program", CompilerOutputKind.PROGRAM),
-    DYNAMIC("dynamic", CompilerOutputKind.DYNAMIC),
-    FRAMEWORK("framework", CompilerOutputKind.FRAMEWORK),
-    LIBRARY("library", CompilerOutputKind.LIBRARY),
-    BITCODE("bitcode", CompilerOutputKind.BITCODE)
-}
+import org.jetbrains.kotlin.konan.target.KonanTarget
+import org.jetbrains.kotlin.konan.target.Distribution
+import java.io.File
 
 /**
  * A task compiling the target executable/library using Kotlin/Native compiler
  */
 abstract class KonanCompileTask: KonanBuildingTask(), KonanCompileSpec {
 
-    // TODO: Support custom runner options (java options)
-    @Internal override val toolRunner = KonanCompilerRunner(project)
+    @Internal override val toolRunner = KonanCompilerRunner(project, project.konanExtension.jvmArgs)
 
-    abstract val produce: Produce
+    abstract val produce: CompilerOutputKind
         @Internal get
 
     // Output artifact --------------------------------------------------------
 
     override val artifactSuffix: String
-        @Internal get() = produce.kind.suffix(konanTarget)
+        @Internal get() = produce.suffix(konanTarget)
+
+    override val artifactPrefix: String
+        @Internal get() = produce.prefix(konanTarget)
+
+    // Multiplatform support --------------------------------------------------
+
+    @Input var commonSourceSets = listOf("main")
+
+    @Internal var enableMultiplatform = false
+
+    internal val commonSrcFiles_ = mutableSetOf<FileCollection>()
+    val commonSrcFiles: Collection<FileCollection>
+        @Internal get() = if (enableMultiplatform) commonSrcFiles_ else emptyList()
 
     // Other compilation parameters -------------------------------------------
 
     protected val srcFiles_ = mutableSetOf<FileCollection>()
     val srcFiles: Collection<FileCollection>
-        @InputFiles get() = srcFiles_.takeIf { !it.isEmpty() } ?: listOf(project.konanDefaultSrcFiles)
+        @Internal get() = srcFiles_.takeIf { !it.isEmpty() } ?: listOf(project.konanDefaultSrcFiles)
+
+    val allSources: Collection<FileCollection>
+        @InputFiles get() = listOf(srcFiles, commonSrcFiles).flatten()
+
+    private val allSourceFiles: List<File>
+        @Internal get() = allSources
+                .flatMap { it.files }
+                .filter { it.name.endsWith(".kt") }
 
     @InputFiles val nativeLibraries = mutableSetOf<FileCollection>()
 
     @Input val linkerOpts = mutableListOf<String>()
 
-    @Input var enableDebug =
-            project.properties.containsKey("enableDebug") &&
-            project.properties["enableDebug"].toString().toBoolean()
+    @Input var enableDebug = project.findProperty("enableDebug")?.toString()?.toBoolean()
+            ?: project.environmentVariables.debuggingSymbols
 
     @Input var noStdLib            = false
     @Input var noMain              = false
-    @Input var enableOptimizations = false
+    @Input var enableOptimizations = project.environmentVariables.enableOptimizations
     @Input var enableAssertions    = false
 
     @Optional @Input var entryPoint: String? = null
@@ -73,6 +94,11 @@ abstract class KonanCompileTask: KonanBuildingTask(), KonanCompileSpec {
     val apiVersion      : String?
         @Optional @Input get() = project.konanExtension.apiVersion
 
+    protected fun directoryToKt(dir: Any) = project.fileTree(dir).apply {
+        include("**/*.kt")
+        exclude { it.file.startsWith(project.buildDir) }
+    }
+
     // Command line  ------------------------------------------------------------
 
     override fun buildArgs() = mutableListOf<String>().apply {
@@ -80,16 +106,23 @@ abstract class KonanCompileTask: KonanBuildingTask(), KonanCompileSpec {
 
         addArgs("-repo", libraries.repos.map { it.canonicalPath })
 
+        if (platformConfiguration.files.isNotEmpty()) {
+            platformConfiguration.files.filter { it.name.endsWith(".klib") }.forEach {
+                // The library's directory is added in libraries.repos.
+                addArg("-library", it.nameWithoutExtension)
+            }
+        }
         addFileArgs("-library", libraries.files)
         addArgs("-library", libraries.namedKlibs)
-        addArgs("-library", libraries.artifacts.map { it.artifact.canonicalPath })
+        // The library's directory is added in libraries.repos.
+        addArgs("-library", libraries.artifacts.map { it.artifact.nameWithoutExtension })
 
         addFileArgs("-nativelibrary", nativeLibraries)
-        addArg("-produce", produce.cliOption)
+        addArg("-produce", produce.name.toLowerCase())
 
         addListArg("-linkerOpts", linkerOpts)
 
-        addArgIfNotNull("-target", konanTarget.userName)
+        addArgIfNotNull("-target", konanTarget.visibleName)
         addArgIfNotNull("-language-version", languageVersion)
         addArgIfNotNull("-api-version", apiVersion)
         addArgIfNotNull("-entry", entryPoint)
@@ -101,10 +134,14 @@ abstract class KonanCompileTask: KonanBuildingTask(), KonanCompileSpec {
         addKey("-ea", enableAssertions)
         addKey("--time", measureTime)
         addKey("-nodefaultlibs", noDefaultLibs)
+        addKey("-Xmulti-platform", enableMultiplatform)
+
+        if (libraries.friends.isNotEmpty())
+            addArg("-friend-modules", libraries.friends.joinToString(File.pathSeparator))
 
         addAll(extraOpts)
 
-        srcFiles.flatMap { it.files }.filter { it.name.endsWith(".kt") }.mapTo(this) { it.canonicalPath }
+        allSourceFiles.mapTo(this) { it.canonicalPath }
     }
 
     // region DSL.
@@ -112,10 +149,7 @@ abstract class KonanCompileTask: KonanBuildingTask(), KonanCompileSpec {
     // DSL. Input/output files.
 
     override fun srcDir(dir: Any) {
-        srcFiles_.add(project.fileTree(dir).apply {
-            include("**/*.kt")
-            exclude { it.file.startsWith(project.buildDir) }
-        })
+        srcFiles_.add(directoryToKt(dir))
     }
     override fun srcFiles(vararg files: Any) {
         srcFiles_.add(project.files(files))
@@ -130,6 +164,27 @@ abstract class KonanCompileTask: KonanBuildingTask(), KonanCompileSpec {
     }
     override fun nativeLibraries(libs: FileCollection) {
         nativeLibraries.add(libs)
+    }
+
+    // DSL. Multiplatform projects.
+
+    override fun enableMultiplatform(flag: Boolean) {
+        enableMultiplatform = flag
+    }
+
+    @Deprecated("Use commonSourceSets instead", ReplaceWith("commonSourceSets(sourceSetName)"))
+    override fun commonSourceSet(sourceSetName: String) {
+        commonSourceSets = listOf(sourceSetName)
+        enableMultiplatform(true)
+    }
+
+    override fun commonSourceSets(vararg sourceSetNames: String) {
+        commonSourceSets = sourceSetNames.toList()
+        enableMultiplatform(true)
+    }
+
+    internal fun commonSrcDir(dir: Any) {
+        commonSrcFiles_.add(directoryToKt(dir))
     }
 
     // DSL. Other parameters.
@@ -167,27 +222,81 @@ abstract class KonanCompileTask: KonanBuildingTask(), KonanCompileSpec {
         measureTime = flag
     }
     // endregion
+
+    // region IDE model
+    override fun toModelArtifact(): KonanModelArtifact {
+        val repos = libraries.repos
+        val resolver = defaultResolver(
+                repos.map { it.absolutePath },
+                konanTarget,
+                Distribution(konanHomeOverride = project.konanHome)
+        )
+
+        return KonanModelArtifactImpl(
+                artifactName,
+                artifact,
+                produce,
+                konanTarget.name,
+                name,
+                allSources.filterIsInstance(ConfigurableFileTree::class.java).map { it.dir },
+                allSourceFiles,
+                libraries.asFiles(resolver),
+                repos.toList()
+        )
+    }
+    // endregion
 }
 
 open class KonanCompileProgramTask: KonanCompileTask() {
-    override val produce: Produce  get() = Produce.PROGRAM
+    override val produce: CompilerOutputKind get() = CompilerOutputKind.PROGRAM
+
+    var runTask: Exec? = null
+
+    inner class RunArgumentProvider(): CommandLineArgumentProvider {
+        override fun asArguments() = project.findProperty("runArgs")?.let {
+            it.toString().split(' ')
+        } ?: emptyList()
+    }
+
+    // Create tasks to run supported executables.
+    override fun init(config: KonanBuildingConfig<*>, destinationDir: File, artifactName: String, target: KonanTarget) {
+        super.init(config, destinationDir, artifactName, target)
+        if (!isCrossCompile) {
+            runTask = project.tasks.create("run${artifactName.capitalize()}", Exec::class.java).apply {
+                group = "run"
+                dependsOn(this@KonanCompileProgramTask)
+                val artifactPathClosure = object : Closure<String>(this) {
+                    override fun call() = artifactPath
+                }
+                // Use GString to evaluate a path to the artifact lazily thus allow changing it at configuration phase.
+                val lazyArtifactPath = GStringImpl(arrayOf(artifactPathClosure), arrayOf(""))
+                executable(lazyArtifactPath)
+                // Add values passed in the runArgs project property as arguments.
+                argumentProviders.add(RunArgumentProvider())
+            }
+        }
+    }
+
 }
 
 open class KonanCompileDynamicTask: KonanCompileTask() {
-    override val produce: Produce  get() = Produce.DYNAMIC
+    override val produce: CompilerOutputKind get() = CompilerOutputKind.DYNAMIC
+
+    val headerFile: File
+        @OutputFile get() = destinationDir.resolve("$artifactPrefix${artifactName}_api.h")
 }
 
 open class KonanCompileFrameworkTask: KonanCompileTask() {
-    override val produce: Produce  get() = Produce.FRAMEWORK
+    override val produce: CompilerOutputKind get() = CompilerOutputKind.FRAMEWORK
 
     override val artifact
         @OutputDirectory get() = super.artifact
 }
 
 open class KonanCompileLibraryTask: KonanCompileTask() {
-    override val produce: Produce  get() = Produce.LIBRARY
+    override val produce: CompilerOutputKind get() = CompilerOutputKind.LIBRARY
 }
 
 open class KonanCompileBitcodeTask: KonanCompileTask() {
-    override val produce: Produce  get() = Produce.BITCODE
+    override val produce: CompilerOutputKind get() = CompilerOutputKind.BITCODE
 }

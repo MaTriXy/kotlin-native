@@ -24,7 +24,7 @@ import org.jetbrains.kotlin.gradle.plugin.KonanLibrary
 import org.jetbrains.kotlin.gradle.plugin.KonanProgram
 import org.jetbrains.kotlin.gradle.plugin.konanArtifactsContainer
 import org.jetbrains.kotlin.konan.target.Family
-import org.jetbrains.kotlin.konan.target.TargetManager
+import org.jetbrains.kotlin.konan.target.HostManager
 import java.io.File
 
 open class KonanGenerateCMakeTask : DefaultTask() {
@@ -48,6 +48,8 @@ open class KonanGenerateCMakeTask : DefaultTask() {
                 .mkdir()
     }
 
+    private val host = HostManager.host
+
     private fun generateCMakeLists(
             projectName: String,
             interops: List<KonanInteropLibrary>,
@@ -67,7 +69,7 @@ open class KonanGenerateCMakeTask : DefaultTask() {
             appendln()
 
             for (interop in interops) {
-                val task = interop[TargetManager.host] ?: continue
+                val task = interop[host] ?: continue
                 appendln(
                         Call("cinterop")
                                 .arg("NAME", interop.name)
@@ -77,7 +79,7 @@ open class KonanGenerateCMakeTask : DefaultTask() {
             }
 
             for (library in libraries) {
-                val task = library[TargetManager.host] ?: continue
+                val task = library[host] ?: continue
                 appendln(
                         Call("konanc_library")
                                 .arg("NAME", library.name)
@@ -87,7 +89,7 @@ open class KonanGenerateCMakeTask : DefaultTask() {
             }
 
             for (program in programs) {
-                val task = program[TargetManager.host] ?: continue
+                val task = program[host] ?: continue
                 appendln(
                         Call("konanc_executable")
                                 .arg("NAME", program.name)
@@ -101,7 +103,7 @@ open class KonanGenerateCMakeTask : DefaultTask() {
     private val File.relativePath get() = relativeTo(project.projectDir)
 
     private val String.crossPlatformPath get() =
-        if (TargetManager.host.family == Family.WINDOWS) replace('\\', '/') else this
+        if (host.family == Family.MINGW) replace('\\', '/') else this
 
     private val FileCollection.asCMakeSourceList: List<String>
         get() = files.map { it.relativePath.toString().crossPlatformPath }
@@ -111,7 +113,7 @@ open class KonanGenerateCMakeTask : DefaultTask() {
                 .joinToString(" ")
 
     private val KonanCompileTask.cMakeSources: String
-        get() = srcFiles.flatMap { it.asCMakeSourceList }.joinToString(" ")
+        get() = allSources.flatMap { it.asCMakeSourceList }.joinToString(" ")
 
     private val KonanCompileTask.cMakeLibraries: String
         get() = mutableListOf<String>().apply {
@@ -121,7 +123,7 @@ open class KonanGenerateCMakeTask : DefaultTask() {
         }.joinToString(" ")
 
     private val KonanCompileTask.cMakeLinkerOpts: String
-        get() = linkerOpts.joinToString(" ")
+        get() = linkerOpts.joinToString(" ").replace('\\', '/')
 }
 
 private class Call(val name: String) {

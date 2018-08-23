@@ -18,9 +18,12 @@
 #define RUNTIME_COMMON_H
 
 #define RUNTIME_NOTHROW __attribute__((nothrow))
+#define RUNTIME_NORETURN __attribute__((noreturn))
 #define RUNTIME_CONST __attribute__((const))
 #define RUNTIME_PURE __attribute__((pure))
 #define RUNTIME_USED __attribute__((used))
+
+#define ALWAYS_INLINE __attribute__((always_inline))
 
 #if KONAN_NO_THREADS
 #define THREAD_LOCAL_VARIABLE
@@ -31,7 +34,6 @@
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
 
 #if KONAN_OBJC_INTEROP
-#define KONAN_OBJECTS_CAN_HAVE_RESERVED_TAIL 1
 #define KONAN_TYPE_INFO_HAS_WRITABLE_PART 1
 #endif
 

@@ -16,6 +16,7 @@
 
 package org.jetbrains.kotlin.backend.konan
 
+import kotlinx.cinterop.cValuesOf
 import java.io.PrintWriter
 import llvm.*
 import org.jetbrains.kotlin.backend.common.descriptors.allParameters
@@ -24,16 +25,18 @@ import org.jetbrains.kotlin.backend.common.pop
 import org.jetbrains.kotlin.backend.common.push
 import org.jetbrains.kotlin.backend.konan.descriptors.isUnit
 import org.jetbrains.kotlin.backend.konan.llvm.*
+import org.jetbrains.kotlin.builtins.UnsignedType
 import org.jetbrains.kotlin.descriptors.*
-import org.jetbrains.kotlin.ir.IrElement
-import org.jetbrains.kotlin.ir.declarations.*
-import org.jetbrains.kotlin.ir.visitors.IrElementVisitorVoid
-import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
-import org.jetbrains.kotlin.resolve.descriptorUtil.fqNameSafe
-import org.jetbrains.kotlin.resolve.descriptorUtil.isEffectivelyPublicApi
+import org.jetbrains.kotlin.descriptors.annotations.AnnotationDescriptor
+import org.jetbrains.kotlin.name.FqName
+import org.jetbrains.kotlin.resolve.annotations.*
 import org.jetbrains.kotlin.types.TypeUtils
-import org.jetbrains.kotlin.konan.file.*
 import org.jetbrains.kotlin.konan.target.*
+import org.jetbrains.kotlin.name.isChildOf
+import org.jetbrains.kotlin.resolve.DescriptorUtils
+import org.jetbrains.kotlin.resolve.descriptorUtil.*
+import org.jetbrains.kotlin.types.KotlinType
+import org.jetbrains.kotlin.types.typeUtil.isUnit
 
 private enum class ScopeKind {
     TOP,
@@ -48,6 +51,7 @@ private enum class ElementKind {
 }
 
 private enum class DefinitionKind {
+    C_HEADER_DECLARATION,
     C_HEADER_STRUCT,
     C_SOURCE_DECLARATION,
     C_SOURCE_STRUCT
@@ -64,11 +68,95 @@ private operator fun String.times(count: Int): String {
     return builder.toString()
 }
 
+private val cKeywords = setOf(
+        // Actual C keywords.
+        "auto", "break", "case",
+        "char", "const", "continue",
+        "default", "do", "double",
+        "else", "enum", "extern",
+        "float", "for", "goto",
+        "if", "int", "long",
+        "register", "return",
+        "short", "signed", "sizeof", "static", "struct", "switch",
+        "typedef", "union", "unsigned",
+        "void", "volatile", "while",
+        // C99-specific.
+        "_Bool", "_Complex", "_Imaginary", "inline", "restrict",
+        // C11-specific.
+        "_Alignas", "_Alignof", "_Atomic", "_Generic", "_Noreturn", "_Static_assert", "_Thread_local",
+        // Not exactly keywords, but reserved or standard-defined.
+        "and", "not", "or", "xor",
+        "bool", "complex", "imaginary",
+
+         // C++ keywords not listed above.
+        "alignas", "alignof", "and_eq", "asm",
+        "bitand", "bitor", "bool",
+        "catch", "char16_t", "char32_t", "class", "compl", "constexpr", "const_cast",
+        "decltype", "delete", "dynamic_cast",
+        "explicit", "export",
+        "false", "friend",
+        "inline",
+        "mutable",
+        "namespace", "new", "noexcept", "not_eq", "nullptr",
+        "operator", "or_eq",
+        "private", "protected", "public",
+        "reinterpret_cast",
+        "static_assert",
+        "template", "this", "thread_local", "throw", "true", "try", "typeid", "typename",
+        "using",
+        "virtual",
+        "wchar_t",
+        "xor_eq"
+)
+
+private val cnameAnnotation = FqName("kotlin.native.CName")
+
+private fun org.jetbrains.kotlin.types.KotlinType.isGeneric() =
+        constructor.declarationDescriptor is TypeParameterDescriptor
+
+
+private fun isExportedFunction(descriptor: FunctionDescriptor): Boolean {
+    if (!descriptor.isEffectivelyPublicApi || !descriptor.kind.isReal || descriptor.isExpect)
+        return false
+    descriptor.allParameters.forEach {
+        if (it.type.isGeneric()) return false
+    }
+    val returnType = descriptor.returnType
+    if (returnType == null) return true
+    return !returnType.isGeneric()
+}
+
+private fun isExportedClass(descriptor: ClassDescriptor): Boolean {
+    if (!descriptor.isEffectivelyPublicApi) return false
+    // No sense to export annotations.
+    if (DescriptorUtils.isAnnotationClass(descriptor)) return false
+    // Do not export expect classes.
+    if (descriptor.isExpect) return false
+    // Do not export types with type parameters.
+    // TODO: is it correct?
+    if (!descriptor.declaredTypeParameters.isEmpty()) return false
+    // Do not export inline classes for now. TODO: add proper support.
+    if (descriptor.isInlined()) return false
+
+    return true
+}
+
+private fun AnnotationDescriptor.properValue(key: String) =
+        this.argumentValue(key)?.toString()?.removeSurrounding("\"")
+
+private fun functionImplName(descriptor: DeclarationDescriptor, default: String, shortName: Boolean): String {
+    assert(descriptor is FunctionDescriptor)
+    val annotation = descriptor.annotations.findAnnotation(cnameAnnotation) ?: return default
+    val key = if (shortName) "shortName" else "fullName"
+    val value = annotation.properValue(key)
+    return value.takeIf { value != null && value.isNotEmpty() } ?: default
+}
+
 private class ExportedElementScope(val kind: ScopeKind, val name: String) {
     val elements = mutableListOf<ExportedElement>()
     val scopes = mutableListOf<ExportedElementScope>()
     private val scopeNames = mutableSetOf<String>()
-    private val scopeNamesMap = mutableMapOf<DeclarationDescriptor, String>()
+    private val scopeNamesMap = mutableMapOf<Pair<DeclarationDescriptor, Boolean>, String>()
 
     override fun toString(): String {
         return "$kind: $name ${elements.joinToString(", ")} ${scopes.joinToString("\n")}"
@@ -83,14 +171,20 @@ private class ExportedElementScope(val kind: ScopeKind, val name: String) {
         }
     }
 
-    fun scopeUniqueName(descriptor: DeclarationDescriptor): String {
-        scopeNamesMap[descriptor]?.apply { return this }
-        var computedName = descriptor.fqNameSafe.shortName().asString()
-        while (scopeNames.contains(computedName)) {
+    fun scopeUniqueName(descriptor: DeclarationDescriptor, shortName: Boolean): String {
+        scopeNamesMap[descriptor to shortName]?.apply { return this }
+        var computedName = when (descriptor) {
+            is ConstructorDescriptor -> "${descriptor.constructedClass.fqNameSafe.shortName().asString()}"
+            is PropertyGetterDescriptor -> "get_${descriptor.correspondingProperty.name.asString()}"
+            is PropertySetterDescriptor -> "set_${descriptor.correspondingProperty.name.asString()}"
+            is FunctionDescriptor -> functionImplName(descriptor, descriptor.fqNameSafe.shortName().asString(), shortName)
+            else -> descriptor.fqNameSafe.shortName().asString()
+        }
+        while (scopeNames.contains(computedName) || cKeywords.contains(computedName)) {
             computedName += "_"
         }
         scopeNames += computedName
-        scopeNamesMap[descriptor] = computedName
+        scopeNamesMap[descriptor to shortName] = computedName
         return computedName
     }
 }
@@ -119,8 +213,22 @@ private class ExportedElement(val kind: ElementKind,
             isFunction -> {
                 val function = declaration as FunctionDescriptor
                 cname = "_konan_function_${owner.nextFunctionIndex()}"
-                val llvmFunction = owner.codegen.llvmFunction(function)
-                val bridge = LLVMAddAlias(context.llvmModule, llvmFunction.type, llvmFunction, cname)!!
+                val llvmFunction = owner.codegen.llvmFunction(context.ir.getFromCurrentModule(function))
+                // If function is virtual, we need to resolve receiver properly.
+                val bridge = if (!DescriptorUtils.isTopLevelDeclaration(function) && !function.isExtension &&
+                        function.isOverridable) {
+                    // We need LLVMGetElementType() as otherwise type is function pointer.
+                    generateFunction(owner.codegen, LLVMGetElementType(llvmFunction.type)!!, cname) {
+                        val receiver = param(0)
+                        val numParams = LLVMCountParams(llvmFunction)
+                        val args = (0..numParams - 1).map { index -> param(index) }
+                        val callee = lookupVirtualImpl(receiver, context.ir.getFromCurrentModule(function))
+                        val result = call(callee, args, exceptionHandler = ExceptionHandler.Caller, verbatim = true)
+                        ret(result)
+                    }
+                } else {
+                    LLVMAddAlias(context.llvmModule, llvmFunction.type, llvmFunction, cname)!!
+                }
                 LLVMSetLinkage(bridge, LLVMLinkage.LLVMExternalLinkage)
             }
             isClass -> {
@@ -130,40 +238,58 @@ private class ExportedElement(val kind: ElementKind,
                 val builder = LLVMCreateBuilder()!!
                 val bb = LLVMAppendBasicBlock(getTypeFunction, "")!!
                 LLVMPositionBuilderAtEnd(builder, bb)
-                LLVMBuildRet(builder, (declaration as ClassDescriptor).typeInfoPtr.llvm)
+                LLVMBuildRet(builder, context.ir.getFromCurrentModule(declaration as ClassDescriptor).typeInfoPtr.llvm)
                 LLVMDisposeBuilder(builder)
+            }
+            isEnumEntry -> {
+                // Produce entry getter.
+                cname = "_konan_function_${owner.nextFunctionIndex()}"
+                generateFunction(owner.codegen, owner.kGetObjectFuncType, cname) {
+                    val irEnumEntry = context.ir.getEnumEntryFromCurrentModule(declaration as ClassDescriptor)
+                    val value = getEnumEntry(irEnumEntry, ExceptionHandler.Caller)
+                    ret(value)
+                }
             }
         }
     }
 
-    fun functionName(descriptor: FunctionDescriptor): String {
-        return when (descriptor) {
-            is PropertyGetterDescriptor -> "get_${descriptor.correspondingProperty.name.asString()}"
-            is PropertySetterDescriptor -> "set_${descriptor.correspondingProperty.name.asString()}"
-            else -> scope.scopeUniqueName(descriptor)
-        }
-    }
+    fun uniqueName(descriptor: DeclarationDescriptor, shortName: Boolean) =
+            scope.scopeUniqueName(descriptor, shortName)
 
     val isFunction = declaration is FunctionDescriptor
-    val isClass = declaration is ClassDescriptor
+    val isTopLevelFunction: Boolean
+        get() {
+            if (declaration !is FunctionDescriptor || !declaration.annotations.hasAnnotation(cnameAnnotation))
+                return false
+            val annotation = declaration.annotations.findAnnotation(cnameAnnotation)!!
+            val fullName = annotation.properValue("fullName")
+            return fullName != null && fullName.isNotEmpty()
+        }
+    val isClass = declaration is ClassDescriptor && declaration.kind != ClassKind.ENUM_ENTRY
+    val isEnumEntry = declaration is ClassDescriptor && declaration.kind == ClassKind.ENUM_ENTRY
 
-    fun makeCFunctionSignature(): List<Pair<String, ClassDescriptor>> {
+
+    fun KotlinType.includeToSignature() = !this.isUnit()
+
+    fun makeCFunctionSignature(shortName: Boolean): List<Pair<String, ClassDescriptor>> {
         if (!isFunction) {
             throw Error("only for functions")
         }
         val descriptor = declaration
         val original = descriptor.original as FunctionDescriptor
         val returned = when {
-            original is ConstructorDescriptor ->
-                scope.scopeUniqueName(original.constructedClass) to original.constructedClass
-            // Suspend functions actually return Any?.
-            original.isSuspend -> functionName(original) to
+            original is ConstructorDescriptor -> uniqueName(original, shortName) to original.constructedClass
+        // Suspend functions actually return 'Any?'.
+            original.isSuspend -> uniqueName(original, shortName) to
                     TypeUtils.getClassDescriptor(owner.context.builtIns.nullableAnyType)!!
-            else -> functionName(original) to TypeUtils.getClassDescriptor(original.returnType!!)!!
+            else -> uniqueName(original, shortName) to TypeUtils.getClassDescriptor(original.returnType!!)!!
         }
-        val params = ArrayList(original.explicitParameters.map {
-            owner.translateName(it.name.asString()) to TypeUtils.getClassDescriptor(it.type)!!
-        })
+        val uniqueNames = owner.paramsToUniqueNames(original.explicitParameters)
+        val params = ArrayList(original.explicitParameters
+                .filter { it.type.includeToSignature() }
+                .map { it ->
+                    uniqueNames[it]!! to TypeUtils.getClassDescriptor(it.type)!!
+                })
         return listOf(returned) + params
     }
 
@@ -179,9 +305,11 @@ private class ExportedElement(val kind: ElementKind,
             else -> original.returnType!!
         }
         val returnedClass = TypeUtils.getClassDescriptor(returnedType)!!
-        val params = ArrayList(original.allParameters.map {
-            owner.translateTypeBridge(TypeUtils.getClassDescriptor(it.type)!!)
-        })
+        val params = ArrayList(original.allParameters
+                .filter { it.type.includeToSignature() }
+                .map {
+                    owner.translateTypeBridge(TypeUtils.getClassDescriptor(it.type)!!)
+                })
         if (owner.isMappedToReference(returnedClass) || owner.isMappedToString(returnedClass)) {
             params += "KObjHeader**"
         }
@@ -190,9 +318,17 @@ private class ExportedElement(val kind: ElementKind,
 
 
     fun makeFunctionPointerString(): String {
-        val signature = makeCFunctionSignature()
+        val signature = makeCFunctionSignature(true)
         return "${owner.translateType(signature[0].second)} (*${signature[0].first})(${signature.drop(1).map { it -> "${owner.translateType(it.second)} ${it.first}" }.joinToString(", ")});"
     }
+
+    fun makeTopLevelFunctionString(): Pair<String, String> {
+        val signature = makeCFunctionSignature(false)
+        val name = signature[0].first
+        return (name to
+                "extern ${owner.translateType(signature[0].second)} $name(${signature.drop(1).map { it -> "${owner.translateType(it.second)} ${it.first}" }.joinToString(", ")});")
+    }
+
 
     fun makeFunctionDeclaration(): String {
         assert(isFunction)
@@ -203,7 +339,7 @@ private class ExportedElement(val kind: ElementKind,
         builder.append("(${bridge.drop(1).joinToString(", ")});\n")
 
         // Now the C function body.
-        builder.append(translateBody(makeCFunctionSignature()))
+        builder.append(translateBody(makeCFunctionSignature(false)))
         return builder.toString()
     }
 
@@ -212,11 +348,25 @@ private class ExportedElement(val kind: ElementKind,
         return "extern \"C\" ${owner.prefix}_KType* $cname(void);"
     }
 
+    fun makeEnumEntryDeclaration(): String {
+        assert(isEnumEntry)
+        val enumClass = declaration.containingDeclaration as ClassDescriptor
+        val enumClassC = owner.translateType(enumClass)
+
+        return """
+              |extern "C" KObjHeader* $cname(KObjHeader**);
+              |static $enumClassC ${cname}_impl(void) {
+              |  KObjHolder result_holder;
+              |  KObjHeader* result = $cname(result_holder.slot());
+              |  return $enumClassC { .pinned = CreateStablePointer(result)};
+              |}
+              """.trimMargin()
+    }
+
     private fun translateArgument(name: String, clazz: ClassDescriptor, direction: Direction,
                                   builder: StringBuilder): String {
-        val fqName = clazz.fqNameSafe.asString()
         return when {
-            fqName == "kotlin.String" ->
+            owner.isMappedToString(clazz) ->
                 if (direction == Direction.C_TO_KOTLIN) {
                     builder.append("  KObjHolder ${name}_holder;\n")
                     "CreateStringFromCString($name, ${name}_holder.slot())"
@@ -230,13 +380,25 @@ private class ExportedElement(val kind: ElementKind,
                 } else {
                     "((${owner.translateType(clazz)}){ .pinned = CreateStablePointer(${name})})"
                 }
-            else -> name
+            else -> {
+                assert(!clazz.defaultType.binaryTypeIsReference()) {
+                    println(clazz.toString())
+                }
+                name
+            }
         }
     }
 
+    val cnameImpl: String
+        get() = if (isTopLevelFunction)
+            functionImplName(declaration, "******" /* Default value must never be used. */, false)
+        else
+            "${cname}_impl"
+
     private fun translateBody(cfunction: List<Pair<String, ClassDescriptor>>): String {
+        val visibility = if (isTopLevelFunction) "RUNTIME_USED extern \"C\"" else "static"
         val builder = StringBuilder()
-        builder.append("static ${owner.translateType(cfunction[0].second)} ${cname}_impl(${cfunction.drop(1).mapIndexed { index, it -> "${owner.translateType(it.second)} arg${index}" }.joinToString(", ")}) {\n")
+        builder.append("$visibility ${owner.translateType(cfunction[0].second)} ${cnameImpl}(${cfunction.drop(1).mapIndexed { index, it -> "${owner.translateType(it.second)} arg${index}" }.joinToString(", ")}) {\n")
         val args = ArrayList(cfunction.drop(1).mapIndexed { index, pair ->
             translateArgument("arg$index", pair.second, Direction.C_TO_KOTLIN, builder)
         })
@@ -274,75 +436,208 @@ private class ExportedElement(val kind: ElementKind,
         return builder.toString()
     }
 
+    private fun addUsedType(type: org.jetbrains.kotlin.types.KotlinType, set: MutableSet<ClassDescriptor>) {
+        if (type.constructor.declarationDescriptor is TypeParameterDescriptor) return
+        val clazz = TypeUtils.getClassDescriptor(type)
+        if (clazz == null) {
+            context.reportCompilationWarning("cannot get class for $type")
+        } else {
+            set += clazz
+        }
+    }
+
     fun addUsedTypes(set: MutableSet<ClassDescriptor>) {
         val descriptor = declaration
         when (descriptor) {
             is FunctionDescriptor -> {
                 val original = descriptor.original
-                original.allParameters.forEach { set += TypeUtils.getClassDescriptor(it.type)!! }
-                original.returnType?.let { set += TypeUtils.getClassDescriptor(it)!! }
+                original.allParameters.forEach { addUsedType(it.type, set) }
+                original.returnType?.let { addUsedType(it, set) }
             }
             is PropertyAccessorDescriptor -> {
                 val original = descriptor.original
-                set += TypeUtils.getClassDescriptor(original.correspondingProperty.type)!!
+                addUsedType(original.correspondingProperty.type, set)
+            }
+            is ClassDescriptor -> {
+                set += descriptor
             }
         }
     }
 }
 
-internal class CAdapterGenerator(val context: Context,
-                                 internal val codegen: CodeGenerator) : IrElementVisitorVoid {
+private fun getPackagesFqNames(module: ModuleDescriptor): Set<FqName> {
+    val result = mutableSetOf<FqName>()
+
+    fun getSubPackages(fqName: FqName) {
+        result.add(fqName)
+        module.getSubPackagesOf(fqName) { true }.forEach { getSubPackages(it) }
+    }
+
+    getSubPackages(FqName.ROOT)
+    return result
+}
+
+private fun ModuleDescriptor.getPackageFragments(): List<PackageFragmentDescriptor> =
+        getPackagesFqNames(this).flatMap {
+            getPackage(it).fragments.filter { it.module == this }
+        }
+
+internal class CAdapterGenerator(
+        val context: Context, internal val codegen: CodeGenerator) : DeclarationDescriptorVisitor<Boolean, Void?> {
+
     private val scopes = mutableListOf<ExportedElementScope>()
     internal val prefix = context.config.moduleId
     private lateinit var outputStreamWriter: PrintWriter
+    private val paramNamesRecorded = mutableMapOf<String, Int>()
 
-    override fun visitElement(element: IrElement) {
-        //println(ir2string(element))
-        element.acceptChildrenVoid(this)
+    internal fun paramsToUniqueNames(params: List<ParameterDescriptor>): Map<ParameterDescriptor, String> {
+        paramNamesRecorded.clear()
+        return params.associate {
+            val name = translateName(it.name.asString()) 
+            val count = paramNamesRecorded.getOrDefault(name, 0)
+            paramNamesRecorded[name] = count + 1
+            if (count == 0) {
+                it to name
+            } else {
+                it to "$name${count.toString()}"
+            }
+        }
     }
 
-    override fun visitPackageFragment(declaration: IrPackageFragment) {
-        val fqName = declaration.packageFragmentDescriptor.fqName
-        val name = if (fqName.isRoot) "root" else fqName.shortName().asString()
-        val packageScope = ExportedElementScope(ScopeKind.PACKAGE, name)
-        scopes.last().scopes += packageScope
-        scopes.push(packageScope)
-        declaration.acceptChildrenVoid(this)
-        scopes.pop()
+    private fun visitChildren(descriptors: Collection<DeclarationDescriptor>) {
+        for (descriptor in descriptors) {
+            descriptor.accept(this, null)
+        }
     }
 
-    override fun visitProperty(declaration: IrProperty) {
-        val descriptor = declaration.descriptor
-        if (!descriptor.isEffectivelyPublicApi || !descriptor.kind.isReal) return
-        ExportedElement(ElementKind.PROPERTY, scopes.last(), declaration.descriptor, this)
+    private fun visitChildren(descriptor: DeclarationDescriptor) {
+        descriptor.accept(this, null)
     }
 
-    override fun visitFunction(function: IrFunction) {
-        val descriptor = function.descriptor
-        if (!descriptor.isEffectivelyPublicApi || !descriptor.kind.isReal) return
-        ExportedElement(ElementKind.FUNCTION, scopes.last(), function.descriptor, this)
+    override fun visitConstructorDescriptor(descriptor: ConstructorDescriptor, ignored: Void?): Boolean {
+        if (!isExportedFunction(descriptor)) return true
+        ExportedElement(ElementKind.FUNCTION, scopes.last(), descriptor, this)
+        return true
     }
 
-    override fun visitClass(declaration: IrClass) {
-        val descriptor = declaration.descriptor
-        if (!descriptor.isEffectivelyPublicApi)
-            return
+    override fun visitFunctionDescriptor(descriptor: FunctionDescriptor, ignored: Void?): Boolean {
+        if (!isExportedFunction(descriptor)) return true
+        ExportedElement(ElementKind.FUNCTION, scopes.last(), descriptor, this)
+        return true
+    }
+
+    override fun visitClassDescriptor(descriptor: ClassDescriptor, ignored: Void?): Boolean {
+        if (!isExportedClass(descriptor)) return true
         // TODO: fix me!
         val shortName = descriptor.fqNameSafe.shortName()
         if (shortName.isSpecial || shortName.asString().contains("<anonymous>"))
-            return
+            return true
         val classScope = ExportedElementScope(ScopeKind.CLASS, shortName.asString())
         scopes.last().scopes += classScope
         scopes.push(classScope)
         // Add type getter.
         ExportedElement(ElementKind.TYPE, scopes.last(), descriptor, this)
-        declaration.acceptChildrenVoid(this)
+        visitChildren(descriptor.getConstructors())
+        visitChildren(DescriptorUtils.getAllDescriptors(descriptor.getDefaultType().memberScope))
         scopes.pop()
+        return true
     }
 
-    override fun visitModuleFragment(declaration: IrModuleFragment) {
+    override fun visitPropertyDescriptor(descriptor: PropertyDescriptor, ignored: Void?): Boolean {
+        descriptor.getter?.let { visitChildren(it) }
+        descriptor.setter?.let { visitChildren(it) }
+        return true
+    }
+
+    override fun visitPropertyGetterDescriptor(descriptor: PropertyGetterDescriptor, ignored: Void?): Boolean {
+        if (!isExportedFunction(descriptor)) return true
+        ExportedElement(ElementKind.FUNCTION, scopes.last(), descriptor, this)
+        return true
+    }
+
+    override fun visitPropertySetterDescriptor(descriptor: PropertySetterDescriptor, ignored: Void?): Boolean {
+        if (!isExportedFunction(descriptor)) return true
+        ExportedElement(ElementKind.FUNCTION, scopes.last(), descriptor, this)
+        return true
+    }
+
+    override fun visitScriptDescriptor(descriptor: ScriptDescriptor, ignored: Void?): Boolean {
+        context.reportCompilationWarning("visitScriptDescriptor() is ignored")
+        return true
+    }
+
+    override fun visitPackageViewDescriptor(descriptor: PackageViewDescriptor, ignored: Void?): Boolean {
+        if (descriptor.module != context.moduleDescriptor) return true
+        val fragments = descriptor.module.getPackage(FqName.ROOT).fragments.filter { it.module == context.moduleDescriptor }
+        visitChildren(fragments)
+        return true
+    }
+
+    override fun visitValueParameterDescriptor(descriptor: ValueParameterDescriptor, ignored: Void?): Boolean {
+        TODO("visitValueParameterDescriptor() shall not be seen")
+    }
+
+    override fun visitReceiverParameterDescriptor(descriptor: ReceiverParameterDescriptor?, ignored: Void?): Boolean {
+        TODO("visitReceiverParameterDescriptor() shall not be seen")
+    }
+
+    override fun visitVariableDescriptor(descriptor: VariableDescriptor, ignored: Void?): Boolean {
+        context.reportCompilationWarning("visitVariableDescriptor() is ignored for now")
+        return true
+    }
+
+    override fun visitTypeParameterDescriptor(descriptor: TypeParameterDescriptor, ignored: Void?): Boolean {
+        context.reportCompilationWarning("visitTypeParameterDescriptor() is ignored for now")
+        return true
+    }
+
+    private val seenPackageFragments = mutableSetOf<PackageFragmentDescriptor>()
+    private var currentPackageFragments: List<PackageFragmentDescriptor> = emptyList()
+
+    override fun visitModuleDeclaration(descriptor: ModuleDescriptor, ignored: Void?): Boolean {
+        currentPackageFragments = descriptor.getPackageFragments().sortedWith(
+                Comparator { o1, o2 ->
+                    o1.fqName.toString().compareTo(o2.fqName.toString())
+                })
+        seenPackageFragments.clear()
+        descriptor.getPackage(FqName.ROOT).accept(this, null)
+        return true
+    }
+
+    override fun visitTypeAliasDescriptor(descriptor: TypeAliasDescriptor, ignored: Void?): Boolean {
+        context.reportCompilationWarning("visitTypeAliasDescriptor() is ignored for now")
+        return true
+    }
+
+    override fun visitPackageFragmentDescriptor(descriptor: PackageFragmentDescriptor, ignored: Void?): Boolean {
+        val fqName = descriptor.fqName
+        val name = if (fqName.isRoot) "root" else translateName(fqName.shortName().asString())
+        val packageScope = ExportedElementScope(ScopeKind.PACKAGE, name)
+        scopes.last().scopes += packageScope
+        scopes.push(packageScope)
+        visitChildren(DescriptorUtils.getAllDescriptors(descriptor.getMemberScope()))
+        for (currentPackageFragment in currentPackageFragments) {
+            if (!seenPackageFragments.contains(currentPackageFragment) &&
+                    currentPackageFragment.fqName.isChildOf(descriptor.fqName)) {
+                seenPackageFragments += currentPackageFragment
+                visitChildren(currentPackageFragment)
+            }
+        }
+        scopes.pop()
+        return true
+    }
+
+    fun generateBindings() {
         scopes.push(ExportedElementScope(ScopeKind.TOP, "kotlin"))
-        declaration.acceptChildrenVoid(this)
+        context.moduleDescriptor.accept(this, null)
+        // TODO: add few predefined types.
+        listOf<KotlinType>(
+                // context.builtIns.anyType,
+                // context.builtIns.getPrimitiveArrayKotlinType(PrimitiveType.INT)
+        ).forEach {
+            TypeUtils.getClassDescriptor(it)!!.accept(this@CAdapterGenerator, null)
+        }
+
         val top = scopes.pop()
         assert(scopes.isEmpty() && top.kind == ScopeKind.TOP)
 
@@ -358,16 +653,28 @@ internal class CAdapterGenerator(val context: Context,
         outputStreamWriter.println(string)
     }
 
-    private fun makeElementDefinition(element: ExportedElement,
-                                      kind: DefinitionKind,
-                                      indent: Int) {
+    private fun makeElementDefinition(element: ExportedElement, kind: DefinitionKind, indent: Int) {
         when (kind) {
+            DefinitionKind.C_HEADER_DECLARATION -> {
+                when {
+                    element.isTopLevelFunction -> {
+                        val (name, declaration) = element.makeTopLevelFunctionString()
+                        exportedSymbols += name
+                        output(declaration, 0)
+                    }
+                }
+            }
+
             DefinitionKind.C_HEADER_STRUCT -> {
                 when {
                     element.isFunction ->
                         output(element.makeFunctionPointerString(), indent)
                     element.isClass ->
                         output("${prefix}_KType* (*_type)(void);", indent)
+                    element.isEnumEntry -> {
+                        val enumClass = element.declaration.containingDeclaration as ClassDescriptor
+                        output("${translateType(enumClass)} (*get)(); /* enum entry for ${element.name}. */", indent)
+                    }
                 // TODO: handle properties.
                 }
             }
@@ -378,6 +685,8 @@ internal class CAdapterGenerator(val context: Context,
                         output(element.makeFunctionDeclaration(), 0)
                     element.isClass ->
                         output(element.makeClassDeclaration(), 0)
+                    element.isEnumEntry ->
+                        output(element.makeEnumEntryDeclaration(), 0)
                 // TODO: handle properties.
                 }
             }
@@ -385,18 +694,18 @@ internal class CAdapterGenerator(val context: Context,
             DefinitionKind.C_SOURCE_STRUCT -> {
                 when {
                     element.isFunction ->
-                        output("/* ${element.name} = */ ${element.cname}_impl, ", indent)
+                        output("/* ${element.name} = */ ${element.cnameImpl}, ", indent)
                     element.isClass ->
                         output("/* Type for ${element.name} = */  ${element.cname}, ", indent)
+                    element.isEnumEntry ->
+                        output("/* enum entry getter ${element.name} = */  ${element.cname}_impl,", indent)
                 // TODO: handle properties.
                 }
             }
         }
     }
 
-    private fun makeScopeDefinitions(scope: ExportedElementScope,
-                                     kind: DefinitionKind,
-                                     indent: Int) {
+    private fun makeScopeDefinitions(scope: ExportedElementScope, kind: DefinitionKind, indent: Int) {
         if (kind == DefinitionKind.C_HEADER_STRUCT) output("struct {", indent)
         if (kind == DefinitionKind.C_SOURCE_STRUCT) output(".${scope.name} = {", indent)
         scope.elements.forEach { makeElementDefinition(it, kind, indent + 1) }
@@ -418,7 +727,7 @@ internal class CAdapterGenerator(val context: Context,
         val set = mutableSetOf<ClassDescriptor>()
         defineUsedTypesImpl(scope, set)
         set.forEach {
-            if (isMappedToReference(it)) {
+            if (isMappedToReference(it) && !it.isInlined()) {
                 output("typedef struct {", indent)
                 output("${prefix}_KNativePtr pinned;", indent + 1)
                 output("} ${translateType(it)};", indent)
@@ -426,11 +735,14 @@ internal class CAdapterGenerator(val context: Context,
         }
     }
 
+    val exportedSymbols = mutableListOf<String>()
+
     private fun makeGlobalStruct(top: ExportedElementScope) {
-        val headerFile = context.config.tempFiles.cAdapterHeader
+        val headerFile = context.config.outputFiles.cAdapterHeader
         outputStreamWriter = headerFile.printWriter()
 
         val exportedSymbol = "${prefix}_symbols"
+        exportedSymbols += exportedSymbol
 
         output("#ifndef KONAN_${prefix.toUpperCase()}_H")
         output("#define KONAN_${prefix.toUpperCase()}_H")
@@ -439,20 +751,33 @@ internal class CAdapterGenerator(val context: Context,
         #ifdef __cplusplus
         extern "C" {
         #endif""".trimIndent())
-        output("typedef unsigned char   ${prefix}_KBoolean;")
-        output("typedef char            ${prefix}_KByte;")
-        output("typedef unsigned short  ${prefix}_KChar;")
-        output("typedef short           ${prefix}_KShort;")
-        output("typedef int             ${prefix}_KInt;")
-        output("typedef long long       ${prefix}_KLong;")
-        output("typedef float           ${prefix}_KFloat;")
-        output("typedef double          ${prefix}_KDouble;")
-        output("typedef void*           ${prefix}_KNativePtr;")
+        output("""
+        #ifdef __cplusplus
+        typedef bool            ${prefix}_KBoolean;
+        #else
+        typedef _Bool           ${prefix}_KBoolean;
+        #endif
+        """.trimIndent())
+        output("typedef unsigned short     ${prefix}_KChar;")
+        output("typedef signed char        ${prefix}_KByte;")
+        output("typedef short              ${prefix}_KShort;")
+        output("typedef int                ${prefix}_KInt;")
+        output("typedef long long          ${prefix}_KLong;")
+        output("typedef unsigned char      ${prefix}_KUByte;")
+        output("typedef unsigned short     ${prefix}_KUShort;")
+        output("typedef unsigned int       ${prefix}_KUInt;")
+        output("typedef unsigned long long ${prefix}_KULong;")
+        output("typedef float              ${prefix}_KFloat;")
+        output("typedef double             ${prefix}_KDouble;")
+        output("typedef void*              ${prefix}_KNativePtr;")
         output("struct ${prefix}_KType;")
         output("typedef struct ${prefix}_KType ${prefix}_KType;")
 
         output("")
         defineUsedTypes(top, 0)
+
+        output("")
+        makeScopeDefinitions(top, DefinitionKind.C_HEADER_DECLARATION, 0)
 
         output("")
         output("typedef struct {")
@@ -475,11 +800,11 @@ internal class CAdapterGenerator(val context: Context,
         output("#endif  /* KONAN_${prefix.toUpperCase()}_H */")
 
         outputStreamWriter.close()
-        println("Produced dynamic library API in ${prefix}_api.h")
+        println("Produced library API in ${prefix}_api.h")
 
         outputStreamWriter = context.config.tempFiles
-            .cAdapterCpp
-            .printWriter()
+                .cAdapterCpp
+                .printWriter()
 
         // Include header into C++ source.
         headerFile.forEachLine { it -> output(it) }
@@ -542,38 +867,56 @@ internal class CAdapterGenerator(val context: Context,
         output("RUNTIME_USED ${prefix}_ExportedSymbols* $exportedSymbol(void) { return &__konan_symbols;}")
         outputStreamWriter.close()
 
-        if (context.config.targetManager.target.family == Family.WINDOWS) {
-            outputStreamWriter = context.config.tempFiles
-                .cAdapterDef
-                .printWriter()
+        if (context.config.target.family == Family.MINGW) {
+            outputStreamWriter = context.config.outputFiles
+                    .cAdapterDef
+                    .printWriter()
             output("EXPORTS")
-            output(exportedSymbol)
+            exportedSymbols.forEach { output(it) }
             outputStreamWriter.close()
         }
     }
 
     private val simpleNameMapping = mapOf(
-            "<this>" to "thiz"
+            "<this>" to "thiz",
+            "<set-?>" to "set"
     )
 
-    private val primitiveTypeMapping = mapOf(
-            "kotlin.Byte" to "${prefix}_KByte",
-            "kotlin.Short" to "(${prefix}_KShort",
-            "kotlin.Int" to "${prefix}_KInt",
-            "kotlin.Long" to "${prefix}_KLong",
-            "kotlin.Float" to "${prefix}_KFloat",
-            "kotlin.Double" to "${prefix}_KDouble",
-            "kotlin.Boolean" to "${prefix}_KBoolean",
-            "kotlin.Char" to "${prefix}_KChar"
-    )
-
-    internal fun isMappedToString(descriptor: ClassDescriptor) =
-            descriptor.fqNameSafe.asString() == "kotlin.String"
-
-    internal fun isMappedToReference(descriptor: ClassDescriptor): Boolean {
-        val name = descriptor.fqNameSafe.asString()
-        return !descriptor.isUnit() && name != "kotlin.String" && !primitiveTypeMapping.contains(name)
+    private val primitiveTypeMapping = KonanPrimitiveType.values().associate {
+        it to when (it) {
+            KonanPrimitiveType.BOOLEAN -> "${prefix}_KBoolean"
+            KonanPrimitiveType.CHAR -> "${prefix}_KChar"
+            KonanPrimitiveType.BYTE -> "${prefix}_KByte"
+            KonanPrimitiveType.SHORT -> "${prefix}_KShort"
+            KonanPrimitiveType.INT -> "${prefix}_KInt"
+            KonanPrimitiveType.LONG -> "${prefix}_KLong"
+            KonanPrimitiveType.FLOAT -> "${prefix}_KFloat"
+            KonanPrimitiveType.DOUBLE -> "${prefix}_KDouble"
+            KonanPrimitiveType.NON_NULL_NATIVE_PTR -> "void*"
+        }
     }
+
+    private val unsignedTypeMapping = UnsignedType.values().associate {
+        it.classId to when (it) {
+            UnsignedType.UBYTE -> "${prefix}_KUByte"
+            UnsignedType.USHORT -> "${prefix}_KUShort"
+            UnsignedType.UINT -> "${prefix}_KUInt"
+            UnsignedType.ULONG -> "${prefix}_KULong"
+        }
+    }
+
+    internal fun isMappedToString(descriptor: ClassDescriptor): Boolean =
+            isMappedToString(descriptor.defaultType.computeBinaryType())
+
+    private fun isMappedToString(binaryType: BinaryType<ClassDescriptor>): Boolean =
+            when (binaryType) {
+                is BinaryType.Primitive -> false
+                is BinaryType.Reference -> binaryType.types.first() == context.builtIns.string
+            }
+
+    internal fun isMappedToReference(descriptor: ClassDescriptor) =
+            !isMappedToVoid(descriptor) && !isMappedToString(descriptor) &&
+                    descriptor.defaultType.binaryTypeIsReference()
 
     internal fun isMappedToVoid(descriptor: ClassDescriptor): Boolean {
         return descriptor.isUnit()
@@ -582,19 +925,35 @@ internal class CAdapterGenerator(val context: Context,
     fun translateName(name: String): String {
         return when {
             simpleNameMapping.contains(name) -> simpleNameMapping[name]!!
+            cKeywords.contains(name) -> "${name}_"
             else -> name
         }
     }
 
-    private fun translateTypeFull(clazz: ClassDescriptor): Pair<String, String> {
-        val fqName = clazz.fqNameSafe.asString()
-        return when {
-            clazz.isUnit() -> "void" to "void"
-            fqName == "kotlin.String" -> "const char*" to "KObjHeader*"
-            primitiveTypeMapping.contains(fqName) -> primitiveTypeMapping[fqName]!! to primitiveTypeMapping[fqName]!!
-            else -> "${prefix}_kref_${translateTypeFqName(clazz.fqNameSafe.asString())}" to "KObjHeader*"
-        }
+    private fun translateTypeFull(clazz: ClassDescriptor): Pair<String, String> = if (isMappedToVoid(clazz)) {
+        "void" to "void"
+    } else {
+        translateNonVoidTypeFull(clazz.defaultType)
     }
+
+    private fun translateNonVoidTypeFull(type: KotlinType): Pair<String, String> = type.unwrapToPrimitiveOrReference(
+            eachInlinedClass = { inlinedClass, _ ->
+                unsignedTypeMapping[inlinedClass.classId]?.let {
+                    return it to it
+                }
+            },
+            ifPrimitive = { primitiveType, _ ->
+                primitiveTypeMapping[primitiveType]!!.let { it to it }
+            },
+            ifReference = {
+                val clazz = (it.computeBinaryType() as BinaryType.Reference).types.first()
+                if (clazz == context.builtIns.string) {
+                    "const char*" to "KObjHeader*"
+                } else {
+                    "${prefix}_kref_${translateTypeFqName(clazz.fqNameSafe.asString())}" to "KObjHeader*"
+                }
+            }
+    )
 
     fun translateType(clazz: ClassDescriptor): String = translateTypeFull(clazz).first
 
@@ -609,4 +968,7 @@ internal class CAdapterGenerator(val context: Context,
 
     internal val kGetTypeFuncType =
             LLVMFunctionType(codegen.kTypeInfoPtr, null, 0, 0)!!
+    // Abstraction leak for slot :(.
+    internal val kGetObjectFuncType =
+            LLVMFunctionType(codegen.kObjHeaderPtr, cValuesOf(codegen.kObjHeaderPtrPtr), 1, 0)!!
 }

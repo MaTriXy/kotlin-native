@@ -1,21 +1,40 @@
+/*
+ * Copyright 2010-2018 JetBrains s.r.o.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package org.jetbrains.kotlin.gradle.plugin.test
 
 import org.gradle.testkit.runner.BuildResult
 import org.gradle.testkit.runner.TaskOutcome
-import spock.lang.IgnoreIf
 import spock.lang.Unroll
+
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
 
 class IncrementalSpecification extends BaseKonanSpecification {
 
-    Tuple buildTwice(KonanProject project, Closure change) {
-        def runner = project.createRunner().withArguments('build')
+    Tuple buildTwice(KonanProject project, String task = 'build', Closure change) {
+        def runner = project.createRunner().withArguments(task)
         def firstResult = runner.build()
         change(project)
         def secondResult = runner.build()
         return new Tuple(project, firstResult, secondResult)
     }
 
-    Tuple buildTwice(ArtifactType mainArtifactType = ArtifactType.LIBRARY, Closure change) {
+    Tuple buildTwice(ArtifactType mainArtifactType = ArtifactType.LIBRARY, String task = 'build', Closure change) {
         return buildTwice(KonanProject.createWithInterop(projectDirectory, mainArtifactType), change)
     }
 
@@ -123,7 +142,7 @@ class IncrementalSpecification extends BaseKonanSpecification {
         when:
         def project = KonanProject.createWithInterop(projectDirectory, ArtifactType.LIBRARY) { KonanProject it ->
             it.generateSrcFile(["src", "foo", "kotlin"], 'bar.kt', """
-                fun main(args: Array<String>) { println("Hello!") }
+                fun foo(args: Array<String>) { println("Hello!") }
             """.stripIndent())
         }
         def results = buildTwice(project) { KonanProject it ->
@@ -255,18 +274,38 @@ class IncrementalSpecification extends BaseKonanSpecification {
         recompilationAndInteropProcessingHappened(*results)
     }
 
-    def 'konan version change should cause recompilation and interop reprocessing'() {
+    def 'Common source change should cause recompilation'() {
         when:
-        def project = KonanProject.createWithInterop(projectDirectory, ArtifactType.LIBRARY) { KonanProject it ->
-            it.propertiesFile.append("konan.version=0.3\n")
+        File commonSource
+        def project = KonanProject.createEmpty(projectDirectory) { KonanProject it ->
+            def commonDirectory = MultiplatformSpecification.createCommonProject(it)
+            commonSource = MultiplatformSpecification.createCommonSource(commonDirectory,
+                    ["src", "main", "kotlin"],
+                    "common.kt",
+                    "expect fun foo(): Int")
+            println(it.settingsFile.text)
+
+            it.generateSrcFile("actual.kt", "actual fun foo() = 42")
+            it.buildFile.append("""
+                konanArtifacts {
+                    library('foo') {
+                        enableMultiplatform true
+                    }
+                }
+                
+                dependencies {
+                    expectedBy project(':common')
+                }
+                """.stripIndent())
+            it.buildingTasks.addAll([":compileKonanFoo", ":compileKonanFoo${KonanProject.HOST}}"])
         }
-        def results = buildTwice(project) { KonanProject it ->
-            def newText = it.propertiesFile.text.replace('konan.version=0.3', 'konan.version=0.4')
-            it.propertiesFile.write(newText)
+
+        def results = buildTwice(project, ':build') { KonanProject ->
+            commonSource.append("\nfun bar() = 43")
         }
 
         then:
-        recompilationAndInteropProcessingHappened(*results)
+        onlyRecompilationHappened(*results)
     }
 
     // TODO: Add incremental tests for the 'libraries' block.

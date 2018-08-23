@@ -18,9 +18,6 @@ package org.jetbrains.kotlin.backend.konan.llvm
 
 import kotlinx.cinterop.*
 import llvm.*
-import org.jetbrains.kotlin.types.KotlinType
-import org.jetbrains.kotlin.types.typeUtil.isNothing
-import org.jetbrains.kotlin.types.typeUtil.isUnit
 
 interface RuntimeAware {
     val runtime: Runtime
@@ -30,9 +27,11 @@ class Runtime(bitcodeFile: String) {
     val llvmModule: LLVMModuleRef = parseBitcodeFile(bitcodeFile)
 
     internal fun getStructTypeOrNull(name: String) = LLVMGetTypeByName(llvmModule, "struct.$name")
-    internal fun getStructType(name: String) = getStructTypeOrNull(name)!!
+    internal fun getStructType(name: String) = getStructTypeOrNull(name)
+            ?: throw Error("struct.$name is not found in the Runtime module.")
 
     val typeInfoType = getStructType("TypeInfo")
+    val extendedTypeInfoType = getStructType("ExtendedTypeInfo")
     val writableTypeInfoType = getStructTypeOrNull("WritableTypeInfo")
     val fieldTableRecordType = getStructType("FieldTableRecord")
     val methodTableRecordType = getStructType("MethodTableRecord")
@@ -46,11 +45,6 @@ class Runtime(bitcodeFile: String) {
 
     val target = LLVMGetTarget(llvmModule)!!.toKString()
 
-    // TODO: deduce TLS model from explicit config parameter.
-    val tlsMode by lazy {
-        if (target.indexOf("wasm") != -1) LLVMThreadLocalMode.LLVMNotThreadLocal
-        else LLVMThreadLocalMode.LLVMGeneralDynamicTLSModel
-    }
     val dataLayout = LLVMGetDataLayout(llvmModule)!!.toKString()
 
     val targetData = LLVMCreateTargetData(dataLayout)!!
@@ -61,7 +55,6 @@ class Runtime(bitcodeFile: String) {
     val objCToKotlinMethodAdapter by lazy { getStructType("ObjCToKotlinMethodAdapter") }
     val kotlinToObjCMethodAdapter by lazy { getStructType("KotlinToObjCMethodAdapter") }
     val typeInfoObjCExportAddition by lazy { getStructType("TypeInfoObjCExportAddition") }
-
 
     val pointerSize: Int by lazy {
         LLVMABISizeOfType(targetData, objHeaderPtrType).toInt()

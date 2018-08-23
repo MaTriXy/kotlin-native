@@ -18,156 +18,312 @@ package org.jetbrains.kotlin.backend.konan
 
 import llvm.LLVMDumpModule
 import llvm.LLVMModuleRef
+import org.jetbrains.kotlin.backend.common.DumpIrTreeWithDescriptorsVisitor
 import org.jetbrains.kotlin.backend.common.ReflectionTypes
 import org.jetbrains.kotlin.backend.common.validateIrModule
-import org.jetbrains.kotlin.backend.jvm.descriptors.initialize
 import org.jetbrains.kotlin.backend.konan.descriptors.*
-import org.jetbrains.kotlin.backend.common.DumpIrTreeWithDescriptorsVisitor
+import org.jetbrains.kotlin.backend.common.descriptors.DescriptorsFactory
 import org.jetbrains.kotlin.backend.konan.ir.KonanIr
 import org.jetbrains.kotlin.backend.konan.library.KonanLibraryWriter
 import org.jetbrains.kotlin.backend.konan.library.LinkData
 import org.jetbrains.kotlin.backend.konan.llvm.*
+import org.jetbrains.kotlin.backend.konan.lower.DECLARATION_ORIGIN_BRIDGE_METHOD
+import org.jetbrains.kotlin.backend.konan.optimizations.DataFlowIR
 import org.jetbrains.kotlin.descriptors.*
 import org.jetbrains.kotlin.descriptors.annotations.Annotations
 import org.jetbrains.kotlin.descriptors.impl.PropertyDescriptorImpl
 import org.jetbrains.kotlin.descriptors.impl.ReceiverParameterDescriptorImpl
 import org.jetbrains.kotlin.descriptors.impl.SimpleFunctionDescriptorImpl
 import org.jetbrains.kotlin.descriptors.impl.ValueParameterDescriptorImpl
+import org.jetbrains.kotlin.incremental.components.NoLookupLocation
 import org.jetbrains.kotlin.ir.IrElement
 import org.jetbrains.kotlin.ir.SourceManager
 import org.jetbrains.kotlin.ir.declarations.*
 import org.jetbrains.kotlin.ir.declarations.impl.IrFieldImpl
-import org.jetbrains.kotlin.ir.util.DumpIrTreeVisitor
-import org.jetbrains.kotlin.ir.util.endOffsetOrUndefined
-import org.jetbrains.kotlin.ir.util.startOffsetOrUndefined
+import org.jetbrains.kotlin.ir.declarations.impl.IrFunctionImpl
+import org.jetbrains.kotlin.ir.declarations.impl.IrTypeParameterImpl
+import org.jetbrains.kotlin.ir.declarations.impl.IrValueParameterImpl
+import org.jetbrains.kotlin.ir.types.IrType
+import org.jetbrains.kotlin.ir.types.toKotlinType
+import org.jetbrains.kotlin.ir.util.*
 import org.jetbrains.kotlin.ir.visitors.IrElementVisitor
 import org.jetbrains.kotlin.ir.visitors.IrElementVisitorVoid
 import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.ir.visitors.acceptVoid
+import org.jetbrains.kotlin.builtins.konan.KonanBuiltIns
 import org.jetbrains.kotlin.konan.target.CompilerOutputKind
+import org.jetbrains.kotlin.metadata.konan.KonanProtoBuf
 import org.jetbrains.kotlin.name.FqName
+import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.psi2ir.generators.GeneratorContext
-import org.jetbrains.kotlin.resolve.DescriptorUtils
-import org.jetbrains.kotlin.resolve.descriptorUtil.fqNameOrNull
+import org.jetbrains.kotlin.resolve.descriptorUtil.module
+import org.jetbrains.kotlin.resolve.scopes.MemberScope
 import org.jetbrains.kotlin.resolve.scopes.receivers.ImplicitClassReceiver
+import org.jetbrains.kotlin.serialization.deserialization.descriptors.DeserializedClassDescriptor
+import org.jetbrains.kotlin.serialization.deserialization.getName
+import org.jetbrains.kotlin.types.KotlinType
 import java.lang.System.out
 import kotlin.LazyThreadSafetyMode.PUBLICATION
+import kotlin.reflect.KProperty
 
 internal class SpecialDeclarationsFactory(val context: Context) {
     private val enumSpecialDeclarationsFactory by lazy { EnumSpecialDeclarationsFactory(context) }
     private val outerThisFields = mutableMapOf<ClassDescriptor, IrField>()
-    private val bridgesDescriptors = mutableMapOf<Pair<FunctionDescriptor, BridgeDirections>, FunctionDescriptor>()
-    private val loweredEnums = mutableMapOf<ClassDescriptor, LoweredEnum>()
+    private val bridgesDescriptors = mutableMapOf<Pair<IrSimpleFunction, BridgeDirections>, IrSimpleFunction>()
+    private val loweredEnums = mutableMapOf<IrClass, LoweredEnum>()
+    private val ordinals = mutableMapOf<ClassDescriptor, Map<ClassDescriptor, Int>>()
 
     object DECLARATION_ORIGIN_FIELD_FOR_OUTER_THIS :
             IrDeclarationOriginImpl("FIELD_FOR_OUTER_THIS")
 
-    fun getOuterThisField(innerClassDescriptor: ClassDescriptor): IrField =
-        if (!innerClassDescriptor.isInner) throw AssertionError("Class is not inner: $innerClassDescriptor")
-        else outerThisFields.getOrPut(innerClassDescriptor) {
-            val outerClassDescriptor = DescriptorUtils.getContainingClass(innerClassDescriptor) ?:
-                    throw AssertionError("No containing class for inner class $innerClassDescriptor")
+    fun getOuterThisField(innerClass: IrClass): IrField =
+        if (!innerClass.descriptor.isInner) throw AssertionError("Class is not inner: ${innerClass.descriptor}")
+        else outerThisFields.getOrPut(innerClass.descriptor) {
+            val outerClass = innerClass.parent as? IrClass
+                    ?: throw AssertionError("No containing class for inner class ${innerClass.descriptor}")
 
-            val receiver = ReceiverParameterDescriptorImpl(innerClassDescriptor, ImplicitClassReceiver(innerClassDescriptor))
+            val receiver = ReceiverParameterDescriptorImpl(innerClass.descriptor, ImplicitClassReceiver(innerClass.descriptor))
             val descriptor = PropertyDescriptorImpl.create(
-                    innerClassDescriptor, Annotations.EMPTY, Modality.FINAL,
+                    innerClass.descriptor, Annotations.EMPTY, Modality.FINAL,
                     Visibilities.PRIVATE, false, "this$0".synthesizedName, CallableMemberDescriptor.Kind.SYNTHESIZED,
                     SourceElement.NO_SOURCE, false, false, false, false, false, false
-            ).initialize(outerClassDescriptor.defaultType, dispatchReceiverParameter = receiver)
+            ).apply {
+                val receiverType: KotlinType? = null
+                this.setType(outerClass.descriptor.defaultType, emptyList(), receiver, receiverType)
+                initialize(null, null)
+            }
 
             IrFieldImpl(
-                    innerClassDescriptor.startOffsetOrUndefined,
-                    innerClassDescriptor.endOffsetOrUndefined,
+                    innerClass.descriptor.startOffsetOrUndefined,
+                    innerClass.descriptor.endOffsetOrUndefined,
                     DECLARATION_ORIGIN_FIELD_FOR_OUTER_THIS,
-                    descriptor
+                    descriptor,
+                    outerClass.defaultType
             )
         }
 
-    fun getBridgeDescriptor(overriddenFunctionDescriptor: OverriddenFunctionDescriptor): FunctionDescriptor {
-        val descriptor = overriddenFunctionDescriptor.descriptor.original
+    fun getLoweredEnum(enumClass: IrClass): LoweredEnum {
+        assert(enumClass.kind == ClassKind.ENUM_CLASS, { "Expected enum class but was: ${enumClass.descriptor}" })
+        return loweredEnums.getOrPut(enumClass) {
+            enumSpecialDeclarationsFactory.createLoweredEnum(enumClass)
+        }
+    }
+
+    private fun assignOrdinalsToEnumEntries(classDescriptor: ClassDescriptor): Map<ClassDescriptor, Int> {
+        val enumEntryOrdinals = mutableMapOf<ClassDescriptor, Int>()
+        classDescriptor.enumEntries.forEachIndexed { index, entry ->
+            enumEntryOrdinals[entry] = index
+        }
+        return enumEntryOrdinals
+    }
+
+    fun getEnumEntryOrdinal(entryDescriptor: ClassDescriptor): Int {
+        val enumClassDescriptor = entryDescriptor.containingDeclaration as ClassDescriptor
+        // If enum came from another module then we need to get serialized ordinal number.
+        // We serialize ordinal because current serialization cannot preserve enum entry order.
+        if (enumClassDescriptor is DeserializedClassDescriptor) {
+            return enumClassDescriptor.classProto.enumEntryList
+                    .first { entryDescriptor.name == enumClassDescriptor.c.nameResolver.getName(it.name) }
+                    .getExtension(KonanProtoBuf.enumEntryOrdinal)
+        }
+        return ordinals.getOrPut(enumClassDescriptor) { assignOrdinalsToEnumEntries(enumClassDescriptor) }[entryDescriptor]!!
+    }
+
+    fun getBridge(overriddenFunctionDescriptor: OverriddenFunctionDescriptor): IrSimpleFunction {
+        val irFunction = overriddenFunctionDescriptor.descriptor
         assert(overriddenFunctionDescriptor.needBridge,
-                { "Function $descriptor is not needed in a bridge to call overridden function ${overriddenFunctionDescriptor.overriddenDescriptor}" })
+                { "Function ${irFunction.descriptor} is not needed in a bridge to call overridden function ${overriddenFunctionDescriptor.overriddenDescriptor.descriptor}" })
         val bridgeDirections = overriddenFunctionDescriptor.bridgeDirections
-        return bridgesDescriptors.getOrPut(descriptor to bridgeDirections) {
-            SimpleFunctionDescriptorImpl.create(
-                    /* containingDeclaration = */ descriptor.containingDeclaration,
-                    /* annotations           = */ Annotations.EMPTY,
-                    /* name                  = */ "<bridge-$bridgeDirections>${descriptor.functionName}".synthesizedName,
-                    /* kind                  = */ CallableMemberDescriptor.Kind.DECLARATION,
-                    /* source                = */ SourceElement.NO_SOURCE).apply {
-                initializeBridgeDescriptor(this, descriptor, bridgeDirections.array)
+        return bridgesDescriptors.getOrPut(irFunction to bridgeDirections) {
+            createBridge(irFunction, bridgeDirections)
+        }
+    }
+
+    private fun createBridge(function: IrFunction, bridgeDirections: BridgeDirections): IrFunctionImpl {
+        val returnType = when (bridgeDirections.array[0]) {
+            BridgeDirection.TO_VALUE_TYPE,
+            BridgeDirection.NOT_NEEDED -> function.returnType
+            BridgeDirection.FROM_VALUE_TYPE -> context.irBuiltIns.anyNType
+        }
+
+        val dispatchReceiver = when (bridgeDirections.array[1]) {
+            BridgeDirection.TO_VALUE_TYPE   -> function.dispatchReceiverParameter!!
+            BridgeDirection.NOT_NEEDED      -> function.dispatchReceiverParameter
+            BridgeDirection.FROM_VALUE_TYPE -> context.irBuiltIns.anyClass.owner.thisReceiver!!
+        }
+
+        val extensionReceiverType = when (bridgeDirections.array[2]) {
+            BridgeDirection.TO_VALUE_TYPE   -> function.extensionReceiverParameter!!.type
+            BridgeDirection.NOT_NEEDED      -> function.extensionReceiverParameter?.type
+            BridgeDirection.FROM_VALUE_TYPE -> context.irBuiltIns.anyNType
+        }
+
+        val valueParameterTypes = function.valueParameters.mapIndexed { index, valueParameter ->
+            when (bridgeDirections.array[index + 3]) {
+                BridgeDirection.TO_VALUE_TYPE   -> valueParameter.type
+                BridgeDirection.NOT_NEEDED      -> valueParameter.type
+                BridgeDirection.FROM_VALUE_TYPE -> context.irBuiltIns.anyNType
             }
         }
+        val bridgeDescriptor = createBridgeDescriptor(
+                function,
+                bridgeDirections,
+                returnType,
+                dispatchReceiver,
+                extensionReceiverType,
+                valueParameterTypes
+        )
+
+        val bridge = IrFunctionImpl(
+                function.startOffset,
+                function.endOffset,
+                DECLARATION_ORIGIN_BRIDGE_METHOD(function),
+                bridgeDescriptor
+        ).apply {
+            this.returnType = returnType
+            this.parent = function.parent
+        }
+
+        bridge.dispatchReceiverParameter = dispatchReceiver?.let {
+            IrValueParameterImpl(
+                    it.startOffset,
+                    it.endOffset,
+                    IrDeclarationOrigin.DEFINED,
+                    it.descriptor,
+                    it.type,
+                    null
+            )
+        }
+
+        extensionReceiverType?.let {
+            val extensionReceiverParameter = function.extensionReceiverParameter!!
+            bridge.extensionReceiverParameter = IrValueParameterImpl(
+                    extensionReceiverParameter.startOffset,
+                    extensionReceiverParameter.endOffset,
+                    extensionReceiverParameter.origin,
+                    bridge.descriptor.extensionReceiverParameter!!,
+                    it, null
+            )
+        }
+        function.valueParameters.mapIndexedTo(bridge.valueParameters) { index, valueParameter ->
+            val type = valueParameterTypes[index]
+
+            IrValueParameterImpl(
+                    valueParameter.startOffset,
+                    valueParameter.endOffset,
+                    valueParameter.origin,
+                    bridge.descriptor.valueParameters[index],
+                    type, valueParameter.varargElementType
+            )
+        }
+
+        function.typeParameters.mapTo(bridge.typeParameters) {
+            IrTypeParameterImpl(it.startOffset, it.endOffset, it.origin, it.descriptor).apply {
+                superTypes += it.superTypes
+            }
+        }
+
+        return bridge
     }
 
-    fun getLoweredEnum(enumClassDescriptor: ClassDescriptor): LoweredEnum {
-        assert(enumClassDescriptor.kind == ClassKind.ENUM_CLASS, { "Expected enum class but was: $enumClassDescriptor" })
-        return loweredEnums.getOrPut(enumClassDescriptor) {
-            enumSpecialDeclarationsFactory.createLoweredEnum(enumClassDescriptor)
-        }
-    }
+    private fun createBridgeDescriptor(
+            function: IrFunction,
+            bridgeDirections: BridgeDirections,
+            returnType: IrType,
+            dispatchReceiverParameter: IrValueParameter?,
+            extensionReceiverType: IrType?,
+            valueParameterTypes: List<IrType>
+    ): SimpleFunctionDescriptor {
 
-    private fun initializeBridgeDescriptor(bridgeDescriptor: SimpleFunctionDescriptorImpl,
-                                           descriptor: FunctionDescriptor,
-                                           bridgeDirections: Array<BridgeDirection>) {
-        val returnType = when (bridgeDirections[0]) {
-            BridgeDirection.TO_VALUE_TYPE   -> descriptor.returnType!!
-            BridgeDirection.NOT_NEEDED      -> descriptor.returnType
-            BridgeDirection.FROM_VALUE_TYPE -> context.builtIns.nullableAnyType
-        }
-
-        val extensionReceiverType = when (bridgeDirections[1]) {
-            BridgeDirection.TO_VALUE_TYPE   -> descriptor.extensionReceiverParameter!!.type
-            BridgeDirection.NOT_NEEDED      -> descriptor.extensionReceiverParameter?.type
-            BridgeDirection.FROM_VALUE_TYPE -> context.builtIns.nullableAnyType
-        }
+        val descriptor = function.descriptor
+        val bridgeDescriptor = SimpleFunctionDescriptorImpl.create(
+                /* containingDeclaration = */ descriptor.containingDeclaration,
+                /* annotations           = */ Annotations.EMPTY,
+                /* name                  = */ "<bridge-$bridgeDirections>${function.functionName}".synthesizedName,
+                /* kind                  = */ CallableMemberDescriptor.Kind.DECLARATION,
+                /* source                = */ SourceElement.NO_SOURCE)
 
         val valueParameters = descriptor.valueParameters.mapIndexed { index, valueParameterDescriptor ->
-                val outType = when (bridgeDirections[index + 2]) {
-                    BridgeDirection.TO_VALUE_TYPE   -> valueParameterDescriptor.type
-                    BridgeDirection.NOT_NEEDED      -> valueParameterDescriptor.type
-                    BridgeDirection.FROM_VALUE_TYPE -> context.builtIns.nullableAnyType
-                }
-                ValueParameterDescriptorImpl(
+            ValueParameterDescriptorImpl(
                     containingDeclaration = valueParameterDescriptor.containingDeclaration,
-                    original              = null,
-                    index                 = index,
-                    annotations           = Annotations.EMPTY,
-                    name                  = valueParameterDescriptor.name,
-                    outType               = outType,
-                    declaresDefaultValue  = valueParameterDescriptor.declaresDefaultValue(),
-                    isCrossinline         = valueParameterDescriptor.isCrossinline,
-                    isNoinline            = valueParameterDescriptor.isNoinline,
-                    varargElementType     = valueParameterDescriptor.varargElementType,
-                    source                = SourceElement.NO_SOURCE)
+                    original = null,
+                    index = index,
+                    annotations = Annotations.EMPTY,
+                    name = valueParameterDescriptor.name,
+                    outType = valueParameterTypes[index].toKotlinType(),
+                    declaresDefaultValue = valueParameterDescriptor.declaresDefaultValue(),
+                    isCrossinline = valueParameterDescriptor.isCrossinline,
+                    isNoinline = valueParameterDescriptor.isNoinline,
+                    varargElementType = valueParameterDescriptor.varargElementType,
+                    source = SourceElement.NO_SOURCE)
         }
         bridgeDescriptor.initialize(
-                /* receiverParameterType        = */ extensionReceiverType,
-                /* dispatchReceiverParameter    = */ descriptor.dispatchReceiverParameter,
+                /* receiverParameterType        = */ extensionReceiverType?.toKotlinType(),
+                /* dispatchReceiverParameter    = */ dispatchReceiverParameter?.descriptor as ReceiverParameterDescriptor?,
                 /* typeParameters               = */ descriptor.typeParameters,
                 /* unsubstitutedValueParameters = */ valueParameters,
-                /* unsubstitutedReturnType      = */ returnType,
+                /* unsubstitutedReturnType      = */ returnType.toKotlinType(),
                 /* modality                     = */ descriptor.modality,
                 /* visibility                   = */ descriptor.visibility).apply {
-            isSuspend                           =    descriptor.isSuspend
+            isSuspend = descriptor.isSuspend
         }
+        return bridgeDescriptor
     }
 }
 
 internal class Context(config: KonanConfig) : KonanBackendContext(config) {
+    override val descriptorsFactory: DescriptorsFactory
+        get() = TODO("not implemented")
+
+    override fun getClass(fqName: FqName): ClassDescriptor {
+        TODO("not implemented")
+    }
+
     lateinit var moduleDescriptor: ModuleDescriptor
 
     override val builtIns: KonanBuiltIns by lazy(PUBLICATION) {
         moduleDescriptor.builtIns as KonanBuiltIns
     }
 
-    val specialDeclarationsFactory = SpecialDeclarationsFactory(this)
-    override val reflectionTypes: ReflectionTypes by lazy(PUBLICATION) {
-        ReflectionTypes(moduleDescriptor, FqName("konan.internal"))
-    }
-    private val vtableBuilders = mutableMapOf<ClassDescriptor, ClassVtablesBuilder>()
+    private val packageScope by lazy { builtIns.builtInsModule.getPackage(KonanFqNames.internalPackageName).memberScope }
 
-    fun getVtableBuilder(classDescriptor: ClassDescriptor) = vtableBuilders.getOrPut(classDescriptor) {
+    val nativePtr by lazy { packageScope.getContributedClassifier(NATIVE_PTR_NAME) as ClassDescriptor }
+    val nativePtrPlusLong by lazy { nativePtr.unsubstitutedMemberScope.getContributedFunctions("plus").single() }
+    val nativePtrToLong   by lazy { nativePtr.unsubstitutedMemberScope.getContributedFunctions("toLong").single() }
+    val getNativeNullPtr  by lazy { packageScope.getContributedFunctions("getNativeNullPtr").single() }
+    val immutableBlobOf by lazy {
+        builtIns.builtInsModule.getPackage(KonanFqNames.packageName).memberScope.getContributedFunctions("immutableBlobOf").single()
+    }
+
+    val specialDeclarationsFactory = SpecialDeclarationsFactory(this)
+
+    class LazyMember<T>(val initializer: Context.() -> T) {
+        operator fun getValue(thisRef: Context, property: KProperty<*>): T = thisRef.getValue(this)
+    }
+
+    companion object {
+        fun <T> lazyMember(initializer: Context.() -> T) = LazyMember<T>(initializer)
+
+        fun <K, V> lazyMapMember(initializer: Context.(K) -> V): LazyMember<(K) -> V> = lazyMember {
+            val storage = mutableMapOf<K, V>()
+            val result: (K) -> V = {
+                storage.getOrPut(it, { initializer(it) })
+            }
+            result
+        }
+    }
+
+    private val lazyValues = mutableMapOf<LazyMember<*>, Any?>()
+
+    fun <T> getValue(member: LazyMember<T>): T =
+            @Suppress("UNCHECKED_CAST") (lazyValues.getOrPut(member, { member.initializer(this) }) as T)
+
+    override val reflectionTypes: ReflectionTypes by lazy(PUBLICATION) {
+        ReflectionTypes(moduleDescriptor, KonanFqNames.internalPackageName)
+    }
+    private val vtableBuilders = mutableMapOf<IrClass, ClassVtablesBuilder>()
+
+    fun getVtableBuilder(classDescriptor: IrClass) = vtableBuilders.getOrPut(classDescriptor) {
         ClassVtablesBuilder(classDescriptor, this)
     }
 
@@ -176,7 +332,6 @@ internal class Context(config: KonanConfig) : KonanBackendContext(config) {
     // But we have to wait until the code generation phase,
     // to dump this information into generated file.
     var serializedLinkData: LinkData? = null
-    val escapeAnalysisResult = lazy { ModuleEscapeAnalysisResult.ModuleEAResult.newBuilder() }
     var dataFlowGraph: ByteArray? = null
 
     @Deprecated("")
@@ -210,7 +365,7 @@ internal class Context(config: KonanConfig) : KonanBackendContext(config) {
         get() = ir.irModule.irBuiltins
 
     val interopBuiltIns by lazy {
-        InteropBuiltIns(this.builtIns)
+        InteropBuiltIns(this.builtIns, nativePtr)
     }
 
     var llvmModule: LLVMModuleRef? = null
@@ -231,6 +386,9 @@ internal class Context(config: KonanConfig) : KonanBackendContext(config) {
 
     var phase: KonanPhase? = null
     var depth: Int = 0
+
+    lateinit var privateFunctions: List<Pair<IrFunction, DataFlowIR.FunctionSymbol.Declared>>
+    lateinit var privateClasses: List<Pair<IrClass, DataFlowIR.Type.Declared>>
 
     // Cache used for source offset->(line,column) mapping.
     val fileEntryCache = mutableMapOf<String, SourceManager.FileEntry>()
@@ -328,47 +486,31 @@ internal class Context(config: KonanConfig) : KonanBackendContext(config) {
         printBitCode()
     }
 
-    fun shouldVerifyDescriptors(): Boolean {
-        return config.configuration.getBoolean(KonanConfigKeys.VERIFY_DESCRIPTORS) 
-    }
+    fun shouldVerifyDescriptors() = config.configuration.getBoolean(KonanConfigKeys.VERIFY_DESCRIPTORS)
 
-    fun shouldVerifyIr(): Boolean {
-        return config.configuration.getBoolean(KonanConfigKeys.VERIFY_IR) 
-    }
+    fun shouldVerifyIr() = config.configuration.getBoolean(KonanConfigKeys.VERIFY_IR)
 
-    fun shouldVerifyBitCode(): Boolean {
-        return config.configuration.getBoolean(KonanConfigKeys.VERIFY_BITCODE) 
-    }
+    fun shouldVerifyBitCode() = config.configuration.getBoolean(KonanConfigKeys.VERIFY_BITCODE)
 
-    fun shouldPrintDescriptors(): Boolean {
-        return config.configuration.getBoolean(KonanConfigKeys.PRINT_DESCRIPTORS) 
-    }
+    fun shouldPrintDescriptors() = config.configuration.getBoolean(KonanConfigKeys.PRINT_DESCRIPTORS)
 
-    fun shouldPrintIr(): Boolean {
-        return config.configuration.getBoolean(KonanConfigKeys.PRINT_IR) 
-    }
+    fun shouldPrintIr() = config.configuration.getBoolean(KonanConfigKeys.PRINT_IR)
 
-    fun shouldPrintIrWithDescriptors(): Boolean {
-        return config.configuration.getBoolean(KonanConfigKeys.PRINT_IR_WITH_DESCRIPTORS)
-    }
+    fun shouldPrintIrWithDescriptors()=
+            config.configuration.getBoolean(KonanConfigKeys.PRINT_IR_WITH_DESCRIPTORS)
 
-    fun shouldPrintBitCode(): Boolean {
-        return config.configuration.getBoolean(KonanConfigKeys.PRINT_BITCODE) 
-    }
+    fun shouldPrintBitCode() = config.configuration.getBoolean(KonanConfigKeys.PRINT_BITCODE)
 
-    fun shouldPrintLocations(): Boolean {
-        return config.configuration.getBoolean(KonanConfigKeys.PRINT_LOCATIONS)
-    }
+    fun shouldPrintLocations() = config.configuration.getBoolean(KonanConfigKeys.PRINT_LOCATIONS)
 
-    fun shouldProfilePhases(): Boolean {
-        return config.configuration.getBoolean(KonanConfigKeys.TIME_PHASES) 
-    }
+    fun shouldProfilePhases() = config.configuration.getBoolean(KonanConfigKeys.TIME_PHASES)
 
-    fun shouldContainDebugInfo(): Boolean {
-        return config.configuration.getBoolean(KonanConfigKeys.DEBUG)
-    }
+    fun shouldContainDebugInfo() = config.configuration.getBoolean(KonanConfigKeys.DEBUG)
 
-    fun shouldGenerateTestRunner(): Boolean = config.configuration.getBoolean(KonanConfigKeys.GENERATE_TEST_RUNNER)
+    fun shouldOptimize() = config.configuration.getBoolean(KonanConfigKeys.OPTIMIZATION)
+
+    fun shouldGenerateTestRunner() =
+            config.configuration.getBoolean(KonanConfigKeys.GENERATE_TEST_RUNNER)
 
     override fun log(message: () -> String) {
         if (phase?.verbose ?: false) {
@@ -378,8 +520,17 @@ internal class Context(config: KonanConfig) : KonanBackendContext(config) {
 
     lateinit var debugInfo: DebugInfo
 
-    val isDynamicLibrary: Boolean by lazy {
-        config.configuration.get(KonanConfigKeys.PRODUCE) == CompilerOutputKind.DYNAMIC
+    val isNativeLibrary: Boolean by lazy {
+        val kind = config.configuration.get(KonanConfigKeys.PRODUCE)
+        kind == CompilerOutputKind.DYNAMIC || kind == CompilerOutputKind.STATIC
     }
+
+    internal val stdlibModule
+        get() = this.builtIns.any.module
 }
 
+private fun MemberScope.getContributedClassifier(name: String) =
+        this.getContributedClassifier(Name.identifier(name), NoLookupLocation.FROM_BUILTINS)
+
+private fun MemberScope.getContributedFunctions(name: String) =
+        this.getContributedFunctions(Name.identifier(name), NoLookupLocation.FROM_BUILTINS)

@@ -24,6 +24,9 @@ import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.Internal
 import org.jetbrains.kotlin.gradle.plugin.tasks.KonanArtifactWithLibrariesTask
 import org.jetbrains.kotlin.gradle.plugin.tasks.KonanBuildingTask
+import org.jetbrains.kotlin.konan.library.SearchPathResolver
+import org.jetbrains.kotlin.konan.library.defaultResolver
+import org.jetbrains.kotlin.konan.target.Distribution
 import org.jetbrains.kotlin.konan.target.KonanTarget
 import java.io.File
 
@@ -46,10 +49,16 @@ open class KonanLibrariesSpec(val task: KonanArtifactWithLibrariesTask, val proj
             add(task.destinationDir) // TODO: Check if task is a library - create a Library interface
             add(task.project.konanLibsBaseDir.targetSubdir(target))
             addAll(artifacts.flatMap { it.libraries.repos })
+            addAll(task.platformConfiguration.files.map { it.parentFile })
         }
 
     val target: KonanTarget
         @Internal get() = task.konanTarget
+
+    private val friendsTasks = mutableSetOf<KonanBuildingTask>()
+    val friends:Set<File> get() = mutableSetOf<File>().apply {
+        addAll(friendsTasks.map { it.artifact })
+    }
 
     // DSL Methods
 
@@ -63,13 +72,13 @@ open class KonanLibrariesSpec(val task: KonanArtifactWithLibrariesTask, val proj
     fun klibs(vararg libs: String)    = namedKlibs.addAll(libs)
     fun klibs(libs: Iterable<String>) = namedKlibs.addAll(libs)
 
-    private fun klibInternal(lib: KonanBuildingConfig<*>) {
+    private fun klibInternal(lib: KonanBuildingConfig<*>, friend: Boolean) {
         if (!(lib is KonanLibrary || lib is KonanInteropLibrary)) {
             throw InvalidUserDataException("Config ${lib.name} is not a library")
         }
 
         val libraryTask = lib[target] ?:
-            throw InvalidUserDataException("Library ${lib.name} has no target ${target.userName}")
+            throw InvalidUserDataException("Library ${lib.name} has no target ${target.visibleName}")
 
         if (libraryTask == task) {
             throw InvalidUserDataException("Attempt to use a library as its own dependency: " +
@@ -77,21 +86,25 @@ open class KonanLibrariesSpec(val task: KonanArtifactWithLibrariesTask, val proj
         }
         artifacts.add(libraryTask)
         task.dependsOn(libraryTask)
+        if (friend) friendsTasks.add(libraryTask)
     }
 
     /** Direct link to a config */
-    fun klib(lib: KonanLibrary) = klibInternal(lib)
+    fun klib(lib: KonanLibrary) = klibInternal(lib, false)
     /** Direct link to a config */
-    fun klib(lib: KonanInteropLibrary) = klibInternal(lib)
+    fun klib(lib: KonanInteropLibrary) = klibInternal(lib, false)
 
     /** Artifact in the specified project by name */
-    fun artifact(libraryProject: Project, name: String) {
+    fun artifact(libraryProject: Project, name: String, friend: Boolean) {
         project.evaluationDependsOn(libraryProject)
-        klibInternal(libraryProject.konanArtifactsContainer.getByName(name))
+        klibInternal(libraryProject.konanArtifactsContainer.getByName(name), friend)
     }
 
+    fun artifact(libraryProject: Project, name: String) = artifact(libraryProject, name, false)
     /** Artifact in the current project by name */
-    fun artifact(name: String) = artifact(project, name)
+    fun artifact(name: String, friend: Boolean) = artifact(project, name, friend)
+
+    fun artifact(name: String) = artifact(project, name, false)
 
     /** Artifact by direct link */
     fun artifact(artifact: KonanLibrary) = klib(artifact)
@@ -103,7 +116,7 @@ open class KonanLibrariesSpec(val task: KonanArtifactWithLibrariesTask, val proj
         libraryProjects.forEach { prj ->
             project.evaluationDependsOn(prj)
             prj.konanArtifactsContainer.filter(filter).forEach {
-                klibInternal(it)
+                klibInternal(it, false)
             }
         }
     }
@@ -127,5 +140,20 @@ open class KonanLibrariesSpec(val task: KonanArtifactWithLibrariesTask, val proj
 
     private fun Project.evaluationDependsOn(another: Project) {
         if (this != another) { evaluationDependsOn(another.path) }
+    }
+
+    fun asFiles(): List<File> = asFiles(
+            defaultResolver(
+                    repos.map { it.absolutePath },
+                    task.konanTarget,
+                    Distribution(konanHomeOverride = project.konanHome)
+            )
+    )
+
+    fun asFiles(resolver: SearchPathResolver): List<File> = mutableListOf<File>().apply {
+        files.flatMapTo(this) { it.files }
+        addAll(artifactFiles)
+        addAll(task.platformConfiguration.files)
+        namedKlibs.mapTo(this) { project.file(resolver.resolve(it).absolutePath) }
     }
 }

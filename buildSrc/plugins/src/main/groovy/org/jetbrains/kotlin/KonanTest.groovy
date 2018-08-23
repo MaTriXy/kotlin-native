@@ -20,22 +20,21 @@ import groovy.json.JsonOutput
 import org.gradle.api.tasks.JavaExec
 import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecResult
-import org.jetbrains.kotlin.konan.target.*
-import org.jetbrains.kotlin.konan.properties.*
 
+import javax.inject.Inject
+import java.nio.file.Paths
 import java.util.regex.Pattern
 
 abstract class KonanTest extends JavaExec {
+    public boolean inDevelopersRun = false
+
     public String source
-    def targetManager = new TargetManager(project.testTarget)
-    def target = targetManager.target
-    def backendNative = project.project(":backend.native")
-    def runtimeProject = project.project(":runtime")
+    def platformManager = project.rootProject.platformManager
+    def target = platformManager.targetManager(project.testTarget).target
     def dist = project.rootProject.file(project.findProperty("konan.home") ?: "dist")
     def dependenciesDir = project.rootProject.dependenciesDir
     def konancDriver = project.isWindows() ? "konanc.bat" : "konanc"
     def konanc = new File("${dist.canonicalPath}/bin/$konancDriver").absolutePath
-    def mainC = 'main.c'
     def outputSourceSetName = "testOutputLocal"
     def enableKonanAssertions = true
     String outputDirectory = null
@@ -73,10 +72,15 @@ abstract class KonanTest extends JavaExec {
         }
     }
 
-    KonanTest(){
-        // We don't build the compiler if a custom konan.home path is specified.
-        if (!project.hasProperty("konan.home")) {
+    KonanTest() {
+        // We don't build the compiler if a custom dist path is specified.
+        if (!project.ext.useCustomDist) {
             dependsOn(project.rootProject.tasks['dist'])
+            if (project.testTarget) {
+                // if a test_target property is set then tests should depend on a crossDist
+                // otherwise runtime components would not be build for a target
+                dependsOn(project.rootProject.tasks["${target}CrossDist"])
+            }
         }
     }
 
@@ -96,7 +100,7 @@ abstract class KonanTest extends JavaExec {
             classpath = project.fileTree("$dist.canonicalPath/konan/lib/") {
                 include '*.jar'
             }
-            jvmArgs "-Dkonan.home=${dist.canonicalPath}",
+            jvmArgs "-Dkonan.home=${dist.canonicalPath}", "-Xmx2G",
                     "-Djava.library.path=${dist.canonicalPath}/konan/nativelib"
             enableAssertions = true
             def sources = File.createTempFile(name,".lst")
@@ -109,11 +113,12 @@ abstract class KonanTest extends JavaExec {
                     *moreArgs,
                     *project.globalTestArgs]
             if (project.testTarget) {
-                args "-target", target.userName
+                args "-target", target.visibleName
             }
             if (enableKonanAssertions) {
                 args "-ea"
             }
+            println(args)
             standardOutput = log
             errorOutput = log
             super.exec()
@@ -176,6 +181,57 @@ fun handleExceptionContinuation(x: (Throwable) -> Unit): Continuation<Any?> = ob
         createFile(file, text.toString())
     }
 
+    String createTextForHelpers() {
+        def coroutinesPackage = "kotlin.coroutines.experimental"
+
+        def emptyContinuationBody =
+            """
+                |override fun resume(data: Any?) {}
+                |override fun resumeWithException(exception: Throwable) { throw exception }
+            """.stripMargin()
+
+        def handleResultContinuationBody = """
+                |override fun resumeWithException(exception: Throwable) {
+                |   throw exception
+                |}
+                |
+                |override fun resume(data: T) = x(data)
+            """.stripMargin()
+
+        def handleExceptionContinuationBody = """
+                |override fun resumeWithException(exception: Throwable) {
+                |   x(exception)
+                |}
+                |
+                |override fun resume(data: Any?) {}
+            """.stripMargin()
+
+        return """
+            |package helpers
+            |import $coroutinesPackage.*
+            |
+            |fun <T> handleResultContinuation(x: (T) -> Unit): Continuation<T> = object: Continuation<T> {
+            |    override val context = EmptyCoroutineContext
+            |    $handleResultContinuationBody
+            |}
+            |
+            |
+            |fun handleExceptionContinuation(x: (Throwable) -> Unit): Continuation<Any?> = object: Continuation<Any?> {
+            |    override val context = EmptyCoroutineContext
+            |    $handleExceptionContinuationBody
+            |}
+            |
+            |open class EmptyContinuation(override val context: CoroutineContext = EmptyCoroutineContext) : Continuation<Any?> {
+            |    companion object : EmptyContinuation()
+            |    $emptyContinuationBody
+            |}
+            |
+            |abstract class ContinuationAdapter<in T> : Continuation<T> {
+            |    override val context: CoroutineContext = EmptyCoroutineContext
+            |}
+        """.stripMargin()
+    }
+
     // TODO refactor
     List<String> buildCompileList() {
         def result = []
@@ -187,7 +243,12 @@ fun handleExceptionContinuation(x: (Throwable) -> Unit): Continuation<Any?> = ob
         if (srcText.contains('// WITH_COROUTINES')) {
             def coroutineUtilFileName = "$outputDirectory/CoroutineUtil.kt"
             createCoroutineUtil(coroutineUtilFileName)
+
+            def coroutineHelpersFileName = "$outputDirectory/helpers.kt"
+            createFile(coroutineHelpersFileName, createTextForHelpers())
+
             result.add(coroutineUtilFileName)
+            result.add(coroutineHelpersFileName)
         }
 
         if (!matcher.find()) {
@@ -212,7 +273,12 @@ fun handleExceptionContinuation(x: (Throwable) -> Unit): Continuation<Any?> = ob
     }
 
     void createFile(String file, String text) {
-        project.file(file).write(text)
+        Paths.get(file).with {
+            getParent().toFile().with {
+                if (!exists()) { mkdirs() }
+            }
+            write(text)
+        }
     }
 
     @TaskAction
@@ -224,7 +290,7 @@ fun handleExceptionContinuation(x: (Throwable) -> Unit): Continuation<Any?> = ob
 
         createOutputDirectory()
         def program = buildExePath()
-        def suffix = targetManager.target.family.exeSuffix
+        def suffix = target.family.exeSuffix
         def exe = "$program.$suffix"
 
         compileTest(buildCompileList(), program)
@@ -237,9 +303,9 @@ fun handleExceptionContinuation(x: (Throwable) -> Unit): Continuation<Any?> = ob
 
         def out = new ByteArrayOutputStream()
         //TODO Add test timeout
-        ExecResult execResult = project.execRemote {
+        ExecResult execResult = project.execute {
 
-            commandLine executionCommandLine(exe)
+            commandLine exe
 
             if (arguments != null) {
                 args arguments
@@ -276,25 +342,6 @@ fun handleExceptionContinuation(x: (Throwable) -> Unit): Continuation<Any?> = ob
         }
 
         if (!exitCodeMismatch && !goldValueMismatch && this.expectedFail) println("Unexpected pass")
-    }
-
-    List<String> executionCommandLine(String exe) {
-        def properties = project.rootProject.konanProperties
-        def targetToolchain = TargetPropertiesKt.hostTargetString(properties, "targetToolchain", target)
-        def absoluteTargetToolchain = "$dependenciesDir/$targetToolchain"
-        if (target == KonanTarget.WASM32) {
-            def d8 = "$absoluteTargetToolchain/bin/d8"
-            def launcherJs = "${exe}.js"
-            return [d8, '--expose-wasm', launcherJs, '--', exe]
-        } else if (target == KonanTarget.LINUX_MIPS32 || target == KonanTarget.LINUX_MIPSEL32) {
-            def targetSysroot = TargetPropertiesKt.targetString(properties, "targetSysRoot", target)
-            def absoluteTargetSysroot = "$dependenciesDir/$targetSysroot"
-            def qemu = target == KonanTarget.LINUX_MIPS32 ? "qemu-mips" : "qemu-mipsel"
-            def absoluteQemu = "$absoluteTargetToolchain/bin/$qemu"
-            return [absoluteQemu, "-L", absoluteTargetSysroot, exe]
-        } else {
-            return [exe]
-        }
     }
 }
 
@@ -341,6 +388,10 @@ class BuildKonanTest extends ExtKonanTest {
     public List<String> compileList
     public List<String> excludeList
 
+    BuildKonanTest() {
+        super()
+    }
+
     @Override
     List<String> buildCompileList() {
         assert compileList != null
@@ -352,10 +403,15 @@ class BuildKonanTest extends ExtKonanTest {
         // create list of tests to compile
         def compileFiles = new ArrayList<String>()
         compileList.each {
-            project.file(it).eachFileRecurse {
-                if (it.isFile() && it.name.endsWith(".kt") && !excludeFiles.contains(it.absolutePath)) {
-                    compileFiles.add(it.absolutePath)
+            def file = project.file(it)
+            if (file.isDirectory()) {
+                file.eachFileRecurse {
+                    if (it.isFile() && it.name.endsWith(".kt") && !excludeFiles.contains(it.absolutePath)) {
+                        compileFiles.add(it.absolutePath)
+                    }
                 }
+            } else {
+                compileFiles.add(file.absolutePath)
             }
         }
         compileFiles
@@ -383,10 +439,28 @@ class BuildKonanTest extends ExtKonanTest {
  * Runs test built with Konan's TestRunner
  */
 class RunKonanTest extends ExtKonanTest {
+    public def inDevelopersRun = true
 
+    public def buildTaskName = 'buildKonanTests'
+    public def runnerLogger = Logger.SILENT
+    public def useFilter = true
+
+    enum Logger {
+        GTEST,
+        TEAMCITY,
+        SIMPLE,
+        SILENT
+    }
+
+    @Inject
     RunKonanTest() {
         super()
-        dependsOn('buildKonanTests')
+        dependsOn(buildTaskName)
+    }
+
+    RunKonanTest(def depends) {
+        buildTaskName = depends
+        dependsOn(buildTaskName)
     }
 
     @Override
@@ -399,8 +473,10 @@ class RunKonanTest extends ExtKonanTest {
     void executeTest() {
         arguments = arguments ?: []
         // Print only test's output
-        arguments.add("--ktest_logger=SILENT")
-        arguments.add("--ktest_filter=" + convertToPattern(source))
+        arguments.add("--ktest_logger=" + runnerLogger.toString())
+        if (useFilter) {
+            arguments.add("--ktest_filter=" + convertToPattern(source))
+        }
         super.executeTest()
     }
 
@@ -411,10 +487,20 @@ class RunKonanTest extends ExtKonanTest {
     }
 }
 
+class RunStdlibTest extends RunKonanTest {
+    public def inDevelopersRun = false
+
+    RunStdlibTest() {
+        super('buildKonanStdlibTests')
+    }
+}
+
 /**
  * Compiles and executes test as a standalone binary
  */
 class RunStandaloneKonanTest extends KonanTest {
+    public def inDevelopersRun = true
+
     void compileTest(List<String> filesToCompile, String exe) {
         runCompiler(filesToCompile, exe, flags?:[])
     }
@@ -425,6 +511,7 @@ class RunStandaloneKonanTest extends KonanTest {
 // project.exec + a shell script isolate the jvm
 // from IDEA. Use the RunKonanTest instead.
 class RunDriverKonanTest extends KonanTest {
+    public def inDevelopersRun = true
 
     RunDriverKonanTest() {
         super()
@@ -447,7 +534,7 @@ class RunDriverKonanTest extends KonanTest {
                     *moreArgs,
                     *project.globalTestArgs]
             if (project.testTarget) {
-                args "-target", target.userName
+                args "-target", target.visibleName
             }
             if (enableKonanAssertions) {
                 args "-ea"
@@ -462,6 +549,7 @@ class RunDriverKonanTest extends KonanTest {
 }
 
 class RunInteropKonanTest extends KonanTest {
+    public def inDevelopersRun = true
 
     private String interop
     private NamedNativeInteropConfig interopConf
@@ -469,7 +557,7 @@ class RunInteropKonanTest extends KonanTest {
     void setInterop(String value) {
         this.interop = value
         this.interopConf = project.kotlinNativeInterop[value]
-        this.interopConf.target = target.userName
+        this.interopConf.target = target.visibleName
         this.dependsOn(this.interopConf.genTask)
     }
 
@@ -489,18 +577,54 @@ class RunInteropKonanTest extends KonanTest {
 }
 
 class LinkKonanTest extends KonanTest {
+    public def inDevelopersRun = true
+
     protected String lib
 
     void compileTest(List<String> filesToCompile, String exe) {
-        def libDir = project.file(lib).absolutePath
-        def libBc = "${libDir}.bc"
+        def libname = "testklib"
+        def klib = "$outputDirectory/$libname"
 
-        runCompiler(lib, libBc, ['-produce', 'library'] + ((flags != null) ? flags :[]))
-        runCompiler(filesToCompile, exe, ['-library', libBc] + ((flags != null) ? flags :[]))
+        runCompiler(lib, klib, ['-produce', 'library'] + ((flags != null) ? flags :[]))
+        runCompiler(filesToCompile, exe, ['-library', klib] + ((flags != null) ? flags :[]))
     }
 }
 
+class DynamicKonanTest extends KonanTest {
+    protected String cSource
+
+    public def inDevelopersRun = true
+
+    void compileTest(List<String> filesToCompile, String exe) {
+        def libname = "testlib"
+        def dylib = "$outputDirectory/$libname"
+        def realExe = "${exe}.${target.family.exeSuffix}"
+
+        runCompiler(filesToCompile, dylib, ['-produce', 'dynamic'] + ((flags != null) ? flags :[]))
+        runClang([cSource], realExe, ['-I', outputDirectory, '-L', outputDirectory, '-l', libname])
+    }
+
+    void runClang(List<String> cSources, String output, List<String> moreArgs) {
+        def log = new ByteArrayOutputStream()
+        project.execKonanClang(project.target) {
+            workingDir outputDirectory
+
+            executable "clang"
+            args cSources
+            args '-o', output
+            args moreArgs
+            args "-Wl,-rpath,$outputDirectory"
+
+            standardOutput = log
+            errorOutput = log
+        }
+        def logString = log.toString("UTF-8")
+        project.file("${output}.compilation.log").write(logString)
+        println(logString)
+    }
+}
 class RunExternalTestGroup extends RunStandaloneKonanTest {
+    def inDevelopersRun = false
 
     def groupDirectory = "."
     def outputSourceSetName = "testOutputExternal"
@@ -568,6 +692,38 @@ class RunExternalTestGroup extends RunStandaloneKonanTest {
         return null
     }
 
+    void parseLanguageFlags() {
+        def text = project.file(source).text
+        def languageSettings = findLinesWithPrefixesRemoved(text, "// !LANGUAGE: ")
+        if (languageSettings.size() != 0) {
+            languageSettings.forEach { line ->
+                line.split(" ").toList().forEach { flags.add("-XXLanguage:$it") }
+            }
+        }
+
+        def experimentalSettings = findLinesWithPrefixesRemoved(text, "// !USE_EXPERIMENTAL: ")
+        if (experimentalSettings.size() != 0) {
+            experimentalSettings.forEach { line ->
+                line.split(" ").toList().forEach { flags.add("-Xuse-experimental=$it") }
+            }
+        }
+    }
+
+    static String markMutableObjects(String text) {
+        def lines = text.readLines()
+        def result = new ArrayList<String>(lines.size())
+        lines.forEach { line ->
+            // FIXME: find only those who has vars inside
+            // Find object declarations and companion objects
+            if (line.matches("(?m)^\\s*object [a-zA-Z_][a-zA-Z0-9_]*\\s*.*")
+                    || line.matches("(?m)^\\s*companion object.*")) {
+                result += "@kotlin.native.ThreadLocal"
+            }
+            result += line
+        }
+        return result.join(System.lineSeparator())
+    }
+
     List<String> createTestFiles() {
         def identifier = /[a-zA-Z_][a-zA-Z0-9_]/
         def fullQualified = /[a-zA-Z_][a-zA-Z0-9_.]/
@@ -578,12 +734,15 @@ class RunExternalTestGroup extends RunStandaloneKonanTest {
         def classPattern = ~/.*(class|object|enum)\s+(${identifier}*).*/
 
         def sourceName = "_" + normalize(project.file(source).name)
-        def packages = new LinkedHashSet()
+        def packages = new LinkedHashSet<String>()
         def imports = []
 
         def result = super.buildCompileList()
         for (String filePath : result) {
             def text = project.file(filePath).text
+            if (text.contains('COROUTINES_PACKAGE')) {
+                text = text.replace('COROUTINES_PACKAGE', 'kotlin.coroutines.experimental')
+            }
             def pkg = null
             if (text =~ packagePattern) {
                 pkg = (text =~ packagePattern)[0][1]
@@ -597,6 +756,10 @@ class RunExternalTestGroup extends RunStandaloneKonanTest {
             if (text =~ boxPattern) {
                 imports.add("${pkg}.*")
             }
+
+            // Find mutable objects that should be marked as ThreadLocal
+            text = markMutableObjects(text)
+
             createFile(filePath, text)
         }
         // TODO: optimize files writes
@@ -638,11 +801,15 @@ class RunExternalTestGroup extends RunStandaloneKonanTest {
                 text = (pkg ? "$pkg\n" : "") + "import $sourceName.*\n" + text
             }
             // now replace all package usages in full qualified names
-            def res = ""
-            text.eachLine {
-                def line = it
-                packages.each { String pkg ->
-                    if (line.contains("$pkg.") && ! (line =~ packagePattern || line =~ importRegex)) {
+            def res = ""                      // result
+            def vars = new HashSet<String>()  // variables that has the same name as a package
+            text.eachLine { line ->
+                packages.each { pkg ->
+                    if (line =~ ~/va(l|r) *$pkg *\=/) {
+                        vars.add(pkg)
+                    }
+                    if (line.contains("$pkg.") && ! (line =~ packagePattern || line =~ importRegex)
+                            && ! vars.contains(pkg)) {
                         def idx = line.indexOf("$pkg")
                         if (! (idx > 0 && Character.isJavaIdentifierPart(line.charAt(idx - 1))) ) {
                             line = line.substring(0, idx) + "$sourceName.$pkg" + line.substring(idx + pkg.length())
@@ -683,7 +850,8 @@ import kotlin.test.Test
 fun runTest() {
     @Suppress("UNUSED_VARIABLE")
     val result = box()
-    ${ (goldValue != null) ? "print(result)" : "" }
+    if (result != "OK") throw AssertionError("Test failed with: " + result)
+    print(result)
 }
 """     )
         createFile(file, text.toString())
@@ -701,6 +869,19 @@ fun runTest() {
 
     boolean isEnabledForNativeBackend(String fileName) {
         def text = project.file(fileName).text
+
+        def inproperIeee754Comparisons = findLinesWithPrefixesRemoved(text, '// !LANGUAGE: ')
+        if (inproperIeee754Comparisons.contains('-ProperIeee754Comparisons')) {
+            // K/N supports only proper IEEE754 comparisons
+            return false
+        }
+
+        def version = findLinesWithPrefixesRemoved(text, '// LANGUAGE_VERSION: ')
+        if (version.size() != 0 && version.contains("1.3")) {
+            // 1.3 is not yet supported
+            return false
+        }
+
         def targetBackend = findLinesWithPrefixesRemoved(text, "// TARGET_BACKEND")
         if (targetBackend.size() != 0) {
             // There is some target backend. Check if it is NATIVE or not.
@@ -714,6 +895,8 @@ fun runTest() {
             for (String s : ignoredBackends) {
                 if (s.contains("NATIVE")) { return false }
             }
+            // No ignored backends. Check if test is targeted to FULL_JDK
+            if (!findLinesWithPrefixesRemoved(text, "// FULL_JDK").isEmpty()) { return false }
             return true
         }
     }
@@ -765,6 +948,7 @@ fun runTest() {
                 // Create separate output directory for each test in the group.
                 outputDirectory = outputRootDirectory + "/${it.name}"
                 project.file(outputDirectory).mkdirs()
+                parseLanguageFlags()
                 compileList.addAll(createTestFiles())
             }
         }
@@ -794,11 +978,13 @@ fun runTest() {
             testCase.start()
             if (isEnabledForNativeBackend(source)) {
                 try {
+                    println(source)
                     super.executeTest()
                     currentResult = testCase.pass()
                 } catch (TestFailedException e) {
                     currentResult = testCase.fail(e)
                 } catch (Exception ex) {
+                    ex.printStackTrace()
                     currentResult = testCase.error(ex)
                 }
             } else {

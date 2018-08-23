@@ -16,15 +16,16 @@
 
 package org.jetbrains.kotlin.backend.konan.llvm.objcexport
 
-import llvm.*
-import org.jetbrains.kotlin.backend.konan.descriptors.CurrentKonanModule
+import llvm.LLVMLinkage
+import llvm.LLVMSetLinkage
+import llvm.LLVMStoreSizeOfType
+import llvm.LLVMValueRef
 import org.jetbrains.kotlin.backend.konan.llvm.*
-import org.jetbrains.kotlin.builtins.KotlinBuiltIns
-import org.jetbrains.kotlin.descriptors.FunctionDescriptor
-import org.jetbrains.kotlin.incremental.components.NoLookupLocation
-import org.jetbrains.kotlin.name.Name
+import org.jetbrains.kotlin.descriptors.konan.CurrentKonanModuleOrigin
+import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
+import org.jetbrains.kotlin.util.OperatorNameConventions
 
-internal fun ObjCExportCodeGenerator.generateKotlinFunctionImpl(invokeMethod: FunctionDescriptor): ConstPointer {
+internal fun ObjCExportCodeGenerator.generateKotlinFunctionImpl(invokeMethod: IrSimpleFunction): ConstPointer {
     // TODO: consider also overriding methods of `Any`.
 
     val numberOfParameters = invokeMethod.valueParameters.size
@@ -101,6 +102,9 @@ internal class BlockAdapterToFunctionGenerator(val objCExportCodeGenerator: ObjC
         LLVMSetLinkage(it, LLVMLinkage.LLVMInternalLinkage)
     }
 
+    fun org.jetbrains.kotlin.backend.konan.Context.LongInt(value: Long) =
+            if (is64Bit()) Int64(value) else Int32(value.toInt())
+
     private fun generateDescriptorForBlockAdapterToFunction(numberOfParameters: Int): ConstValue {
         val signature = buildString {
             append('@')
@@ -117,17 +121,17 @@ internal class BlockAdapterToFunctionGenerator(val objCExportCodeGenerator: ObjC
             }
         }
 
-        assert(codegen.context.is64Bit())
-
         return Struct(blockDescriptorType,
-                Int64(0),
-                Int64(LLVMStoreSizeOfType(codegen.runtime.targetData, blockLiteralType)),
+                codegen.context.LongInt(0L),
+                codegen.context.LongInt(LLVMStoreSizeOfType(codegen.runtime.targetData, blockLiteralType)),
                 constPointer(copyHelper),
                 constPointer(disposeHelper),
                 codegen.staticData.cStringLiteral(signature),
                 NullPointer(int8Type)
         )
     }
+
+
 
     private fun FunctionGenerationContext.storeRefUnsafe(value: LLVMValueRef, slot: LLVMValueRef) {
         assert(value.type == kObjHeaderPtr)
@@ -146,7 +150,7 @@ internal class BlockAdapterToFunctionGenerator(val objCExportCodeGenerator: ObjC
                 (0 .. numberOfParameters).map { int8TypePtr }
         )
 
-        val result =  generateFunction(codegen, functionType, "invokeBlock$numberOfParameters") {
+        val result = generateFunction(codegen, functionType, "invokeBlock$numberOfParameters") {
             val blockPtr = bitcast(pointerType(blockLiteralType), param(0))
             val kotlinFunction = loadSlot(structGep(blockPtr, 1), isVar = false)
 
@@ -154,7 +158,10 @@ internal class BlockAdapterToFunctionGenerator(val objCExportCodeGenerator: ObjC
                 objCReferenceToKotlin(param(index), Lifetime.ARGUMENT)
             }
 
-            val callee = lookupVirtualImpl(kotlinFunction, context.builtIns.getInvokeDescriptor(numberOfParameters))
+            val invokeMethod = context.ir.symbols.functions[numberOfParameters].owner.declarations
+                    .filterIsInstance<IrSimpleFunction>().single { it.name == OperatorNameConventions.INVOKE }
+
+            val callee = lookupVirtualImpl(kotlinFunction, invokeMethod)
 
             val result = callFromBridge(callee, listOf(kotlinFunction) + args, Lifetime.ARGUMENT)
 
@@ -180,7 +187,7 @@ internal class BlockAdapterToFunctionGenerator(val objCExportCodeGenerator: ObjC
             val isa = codegen.importGlobal(
                     "_NSConcreteStackBlock",
                     int8TypePtr,
-                    CurrentKonanModule
+                    CurrentKonanModuleOrigin
             )
 
             val flags = Int32((1 shl 25) or (1 shl 30) or (1 shl 31)).llvm
@@ -194,8 +201,8 @@ internal class BlockAdapterToFunctionGenerator(val objCExportCodeGenerator: ObjC
             val blockOnStackBase = structGep(blockOnStack, 0)
             val slot = structGep(blockOnStack, 1)
 
-            listOf(bitcast(int8TypePtr, isa), flags, reserved, invoke, descriptor).forEachIndexed { index, it ->
-                storeAny(it, structGep(blockOnStackBase, index))
+            listOf(bitcast(int8TypePtr, isa), flags, reserved, invoke, descriptor).forEachIndexed { index, value ->
+                storeAny(value, structGep(blockOnStackBase, index))
             }
 
             // Note: it is the slot in the block located on stack, so no need to manage it properly:
@@ -204,7 +211,7 @@ internal class BlockAdapterToFunctionGenerator(val objCExportCodeGenerator: ObjC
             val retainBlock = context.llvm.externalFunction(
                     "objc_retainBlock",
                     functionType(int8TypePtr, false, int8TypePtr),
-                    CurrentKonanModule
+                    CurrentKonanModuleOrigin
             )
 
             val copiedBlock = callFromBridge(retainBlock, listOf(bitcast(int8TypePtr, blockOnStack)))
@@ -212,7 +219,7 @@ internal class BlockAdapterToFunctionGenerator(val objCExportCodeGenerator: ObjC
             val autoreleaseReturnValue = context.llvm.externalFunction(
                     "objc_autoreleaseReturnValue",
                     functionType(int8TypePtr, false, int8TypePtr),
-                    CurrentKonanModule
+                    CurrentKonanModuleOrigin
             )
 
             ret(callFromBridge(autoreleaseReturnValue, listOf(copiedBlock)))
@@ -221,9 +228,3 @@ internal class BlockAdapterToFunctionGenerator(val objCExportCodeGenerator: ObjC
         }
     }
 }
-
-private fun KotlinBuiltIns.getInvokeDescriptor(numberOfParameters: Int): FunctionDescriptor =
-        getFunction(numberOfParameters).unsubstitutedMemberScope.getContributedFunctions(
-                Name.identifier("invoke"),
-                NoLookupLocation.FROM_BACKEND
-        ).single()

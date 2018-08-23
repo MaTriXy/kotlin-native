@@ -18,13 +18,12 @@ package org.jetbrains.kotlin.backend.konan.llvm.objc
 
 import llvm.LLVMTypeRef
 import llvm.LLVMValueRef
-import org.jetbrains.kotlin.backend.konan.descriptors.stdlibModule
 import org.jetbrains.kotlin.backend.konan.llvm.*
 
 internal open class ObjCCodeGenerator(val codegen: CodeGenerator) {
     val context = codegen.context
 
-    val dataGenerator = ObjCDataGenerator(codegen)
+    val dataGenerator = codegen.objCDataGenerator!!
 
     fun FunctionGenerationContext.genSelector(selector: String): LLVMValueRef {
         val selectorRef = dataGenerator.genSelectorRef(selector)
@@ -43,6 +42,12 @@ internal open class ObjCCodeGenerator(val codegen: CodeGenerator) {
                     functionType(int8TypePtr, true, int8TypePtr, int8TypePtr),
                     context.stdlibModule.llvmSymbolOrigin
             )
+    )
+
+    val objcRelease = context.llvm.externalFunction(
+            "objc_release",
+            functionType(voidType, false, int8TypePtr),
+            context.stdlibModule.llvmSymbolOrigin
     )
 
     // TODO: this doesn't support stret.

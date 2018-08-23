@@ -21,10 +21,9 @@
 
 package kotlin.test
 
-import konan.FixmeMultiplatform
-import konan.FixmeReflection
 import kotlin.internal.InlineOnly
 import kotlin.internal.OnlyInputTypes
+import kotlin.reflect.KClass
 
 /**
  * Current adapter providing assertion implementations
@@ -59,6 +58,16 @@ fun <@OnlyInputTypes T> assertEquals(expected: T, actual: T, message: String? = 
 /** Asserts that the [actual] value is not equal to the illegal value, with an optional [message]. */
 fun <@OnlyInputTypes T> assertNotEquals(illegal: T, actual: T, message: String? = null) {
     asserter.assertNotEquals(message, illegal, actual)
+}
+
+/** Asserts that [expected] is the same instance as [actual], with an optional [message]. */
+fun <@OnlyInputTypes T> assertSame(expected: T, actual: T, message: String? = null) {
+    asserter.assertSame(message, expected, actual)
+}
+
+/** Asserts that [actual] is not the same instance as [illegal], with an optional [message]. */
+fun <@OnlyInputTypes T> assertNotSame(illegal: T, actual: T, message: String? = null) {
+    asserter.assertNotSame(message, illegal, actual)
 }
 
 /** Asserts that the [actual] value is not `null`, with an optional [message]. */
@@ -114,29 +123,12 @@ fun assertFails(message: String?, block: () -> Unit): Throwable {
  *  Since inline method doesn't allow to trace where it was invoked, it is required to pass a [message] to distinguish this method call from others.
  */
 @InlineOnly
-@FixmeReflection // TODO: Implement as in Kotlin/JVM when KClass is available.
-// TODO: An incorrect llvm module is generated if this method is called. Uncomment it when
-@Suppress("UNUSED_PARAMETER")
-inline fun <reified T : Throwable> assertFailsWith(message: String? = null, noinline block: () -> Unit) /*: T*/ {
-//        try {
-//            block()
-//        } catch (e: Throwable) {
-//            if (e is T) {
-//                return  e
-//            }
-//
-//            @Suppress("INVISIBLE_MEMBER")
-//            asserter.fail(messagePrefix(message) + "Unxepected exception type: $e")
-//        }
-//
-//        @Suppress("INVISIBLE_MEMBER")
-//        val msg = messagePrefix(message)
-//        asserter.fail(msg + "Expected an exception to be thrown, but was completed successfully.")
-}
+inline fun <reified T : Throwable> assertFailsWith(message: String? = null, noinline block: () -> Unit) : T =
+        assertFailsWith(T::class, message, block)
 
 /** Asserts that a [block] fails with a specific exception of type [exceptionClass] being thrown. */
-//@FixmeReflection
-//fun <T : Throwable> assertFailsWith(exceptionClass: KClass<T>, block: () -> Unit): T = assertFailsWith(exceptionClass, null, block)
+fun <T : Throwable> assertFailsWith(exceptionClass: KClass<T>, block: () -> Unit): T =
+        assertFailsWith(exceptionClass, null, block)
 
 
 // From AssertionsH.kt
@@ -144,16 +136,29 @@ inline fun <reified T : Throwable> assertFailsWith(message: String? = null, noin
  * Comments out a block of test code until it is implemented while keeping a link to the code
  * to implement in your unit test output
  */
-@FixmeMultiplatform
 @Suppress("UNUSED_PARAMETER")
-/*header */ inline fun todo(block: () -> Unit) {
+inline fun todo(block: () -> Unit) {
     println("TODO")
 }
 
 /** Asserts that a [block] fails with a specific exception of type [exceptionClass] being thrown. */
-//@FixmeMultiplatform
-//@FixmeReflection
-//header fun <T : Throwable> assertFailsWith(exceptionClass: KClass<T>, message: String?, block: () -> Unit): T
+fun <T : Throwable> assertFailsWith(exceptionClass: KClass<T>, message: String?, block: () -> Unit): T {
+    try {
+        block()
+    } catch (e: Throwable) {
+        if (exceptionClass.isInstance(e)) {
+            @Suppress("UNCHECKED_CAST")
+            return e as T
+        }
+
+        @Suppress("INVISIBLE_MEMBER")
+        asserter.fail(messagePrefix(message) + "Expected an exception of ${exceptionClass.qualifiedName} to be thrown, but was $e")
+    }
+
+    @Suppress("INVISIBLE_MEMBER")
+    val msg = messagePrefix(message)
+    asserter.fail(msg + "Expected an exception of ${exceptionClass.qualifiedName} to be thrown, but was completed successfully.")
+}
 
 // From Assertions.kt
 /**
@@ -203,6 +208,24 @@ interface Asserter {
      */
     fun assertNotEquals(message: String?, illegal: Any?, actual: Any?): Unit {
         assertTrue({ messagePrefix(message) + "Illegal value: <$actual>." }, actual != illegal)
+    }
+
+    /**
+     * Asserts that the specified values are the same instance.
+     *
+     * @param message the message to report if the assertion fails.
+     */
+    fun assertSame(message: String?, expected: Any?, actual: Any?): Unit {
+        assertTrue({ messagePrefix(message) + "Expected <$expected>, actual <$actual> is not same." }, actual === expected)
+    }
+
+    /**
+     * Asserts that the specified values are not the same instance.
+     *
+     * @param message the message to report if the assertion fails.
+     */
+    fun assertNotSame(message: String?, illegal: Any?, actual: Any?): Unit {
+        assertTrue({ messagePrefix(message) + "Expected not same as <$actual>." }, actual !== illegal)
     }
 
     /**

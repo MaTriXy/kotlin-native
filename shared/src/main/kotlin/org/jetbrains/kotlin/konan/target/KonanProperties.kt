@@ -16,63 +16,60 @@
 
 package org.jetbrains.kotlin.konan.properties
 
-import org.jetbrains.kotlin.konan.file.*
-import org.jetbrains.kotlin.konan.target.*
+import org.jetbrains.kotlin.konan.target.KonanTarget
+import org.jetbrains.kotlin.konan.target.Configurables
+import org.jetbrains.kotlin.konan.util.DependencyProcessor
 
-class KonanProperties(val target: KonanTarget, val properties: Properties, val baseDir: String? = null) {
-
+interface TargetableExternalStorage {
     fun targetString(key: String): String? 
-        = properties.targetString(key, target)
-    fun targetList(key: String): List<String> 
-        = properties.targetList(key, target)
+    fun targetList(key: String): List<String>
     fun hostString(key: String): String? 
-        = properties.hostString(key)
     fun hostList(key: String): List<String> 
-        = properties.hostList(key)
     fun hostTargetString(key: String): String? 
-        = properties.hostTargetString(key, target)
     fun hostTargetList(key: String): List<String> 
+    fun absolute(value: String?): String
+    fun downloadDependencies()
+}
+
+abstract class KonanPropertiesLoader(override val target: KonanTarget,
+                                     val properties: Properties,
+                                     val baseDir: String? = null) : Configurables {
+    open val dependencies get() = hostTargetList("dependencies")
+
+    override fun downloadDependencies() {
+        dependencyProcessor!!.run()
+    }
+
+    override fun targetString(key: String): String? 
+        = properties.targetString(key, target)
+    override fun targetList(key: String): List<String>
+        = properties.targetList(key, target)
+    override fun hostString(key: String): String? 
+        = properties.hostString(key)
+    override fun hostList(key: String): List<String> 
+        = properties.hostList(key)
+    override fun hostTargetString(key: String): String? 
+        = properties.hostTargetString(key, target)
+    override fun hostTargetList(key: String): List<String> 
         = properties.hostTargetList(key, target)
 
-    // TODO: Delegate to a map?
-    val llvmLtoNooptFlags get() = targetList("llvmLtoNooptFlags")
-    val llvmLtoOptFlags get() = targetList("llvmLtoOptFlags")
-    val llvmLtoFlags get() = targetList("llvmLtoFlags")
-    val llvmLtoDynamicFlags get() = targetList("llvmLtoDynamicFlags")
-    val entrySelector get() = targetList("entrySelector")
-    val linkerOptimizationFlags get() = targetList("linkerOptimizationFlags")
-    val linkerKonanFlags get() = targetList("linkerKonanFlags")
-    val linkerNoDebugFlags get() = targetList("linkerNoDebugFlags")
-    val linkerDynamicFlags get() = targetList("linkerDynamicFlags")
-    val llvmDebugOptFlags get() = targetList("llvmDebugOptFlags")
-    val s2wasmFlags get() = targetList("s2wasmFlags")
+    override fun absolute(value: String?): String =
+            dependencyProcessor!!.resolveRelative(value!!).absolutePath
+    private val dependencyProcessor  by lazy {
+        baseDir?.let { DependencyProcessor(java.io.File(it), this) }
+    }
+}
 
-    val targetSysRoot get() = targetString("targetSysRoot")
-    val libffiDir get() = targetString("libffiDir")
-    val gccToolchain get() = targetString("gccToolchain")
-    val targetArg get() = targetString("quadruple")
-    val llvmHome get() = targetString("llvmHome")
-    // Notice: these ones are host-target.
-    val targetToolchain get() = hostTargetString("targetToolchain")
-    val dependencies get() = hostTargetList("dependencies")
+fun Properties.keepOnlyDefaultProfiles() {
+    val DEPENDENCY_PROFILES_KEY = "dependencyProfiles"
+    val dependencyProfiles = this.getProperty(DEPENDENCY_PROFILES_KEY)
+    if (dependencyProfiles != "default alt")
+        error("unexpected $DEPENDENCY_PROFILES_KEY value: expected 'default alt', got '$dependencyProfiles'")
 
-    fun absolute(value: String?) = "${baseDir!!}/${value!!}"
-
-    val absoluteTargetSysRoot get() = absolute(targetSysRoot)
-    val absoluteTargetToolchain get() = absolute(targetToolchain)
-    val absoluteGccToolchain get() = absolute(gccToolchain)
-    val absoluteLlvmHome get() = absolute(llvmHome)
-    val absoluteLibffiDir get() = absolute(libffiDir)
-
-    val mingwWithLlvm: String?
-        get() { 
-            if (target != KonanTarget.MINGW) {
-                error("Only mingw target can have '.mingwWithLlvm' property")
-            }
-            // TODO: make it a property in the konan.properties.
-            // Use (equal) llvmHome fow now.
-            return targetString("llvmHome")
-        }
-
-    val osVersionMin: String? get() = targetString("osVersionMin")
+    // Force build to use only 'default' profile:
+    this.setProperty(DEPENDENCY_PROFILES_KEY, "default")
+    // Force build to use fixed Xcode version:
+    this.setProperty("useFixedXcodeVersion", "9.4.1")
+    // TODO: it actually affects only resolution made in :dependencies,
+    // that's why we assume that 'default' profile comes first (and check this above).
 }

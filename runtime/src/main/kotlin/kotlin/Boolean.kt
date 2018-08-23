@@ -20,7 +20,11 @@ package kotlin
  * Represents a value which is either `true` or `false`. On the JVM, non-nullable values of this type are
  * represented as values of the primitive type `boolean`.
  */
-public final class Boolean : Comparable<Boolean> {
+public final class Boolean private constructor(private val value: kotlin.native.internal.BooleanValue) : Comparable<Boolean> {
+
+    @SinceKotlin("1.3")
+    companion object {}
+
     /**
      * Returns the inverse of this boolean.
      */
@@ -49,10 +53,10 @@ public final class Boolean : Comparable<Boolean> {
     external public override fun compareTo(other: Boolean): Int
 
     // Konan-specific.
-    public fun equals(other: Boolean): Boolean = konan.internal.areEqualByValue(this, other)
+    public fun equals(other: Boolean): Boolean = kotlin.native.internal.areEqualByValue(this, other)
 
     public override fun equals(other: Any?): Boolean =
-        other is Boolean && konan.internal.areEqualByValue(this, other)
+        other is Boolean && kotlin.native.internal.areEqualByValue(this, other)
 
     public override fun toString() = if (this) "true" else "false"
 

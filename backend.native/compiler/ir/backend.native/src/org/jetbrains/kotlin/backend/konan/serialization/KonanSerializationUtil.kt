@@ -16,45 +16,19 @@
 
 package org.jetbrains.kotlin.backend.konan.serialization
 
-import org.jetbrains.kotlin.backend.konan.*
-import org.jetbrains.kotlin.backend.konan.descriptors.DeserializedKonanModule
-import org.jetbrains.kotlin.backend.konan.descriptors.createKonanModuleDescriptor
-import org.jetbrains.kotlin.backend.konan.library.KonanLibraryReader
+import org.jetbrains.kotlin.backend.konan.Context
+import org.jetbrains.kotlin.backend.konan.descriptors.isExpectMember
 import org.jetbrains.kotlin.backend.konan.library.LinkData
-import org.jetbrains.kotlin.backend.konan.llvm.base64Decode
-import org.jetbrains.kotlin.backend.konan.llvm.base64Encode
-import org.jetbrains.kotlin.backend.konan.llvm.isExported
-import org.jetbrains.kotlin.config.CompilerConfiguration
-import org.jetbrains.kotlin.config.LanguageVersion
-import org.jetbrains.kotlin.config.LanguageVersionSettings
-import org.jetbrains.kotlin.config.languageVersionSettings
-import org.jetbrains.kotlin.descriptors.*
-import org.jetbrains.kotlin.descriptors.impl.LocalVariableDescriptor
-import org.jetbrains.kotlin.descriptors.impl.ModuleDescriptorImpl
-import org.jetbrains.kotlin.descriptors.impl.PropertyDescriptorImpl
-import org.jetbrains.kotlin.incremental.components.LookupTracker
-import org.jetbrains.kotlin.ir.descriptors.IrTemporaryVariableDescriptor
+import org.jetbrains.kotlin.descriptors.ClassDescriptor
+import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
+import org.jetbrains.kotlin.descriptors.ModuleDescriptor
+import org.jetbrains.kotlin.metadata.deserialization.BinaryVersion
+import org.jetbrains.kotlin.metadata.konan.KonanProtoBuf
 import org.jetbrains.kotlin.name.FqName
-import org.jetbrains.kotlin.name.Name
-import org.jetbrains.kotlin.resolve.CompilerDeserializationConfiguration
 import org.jetbrains.kotlin.resolve.DescriptorUtils
 import org.jetbrains.kotlin.resolve.descriptorUtil.module
 import org.jetbrains.kotlin.resolve.scopes.DescriptorKindFilter
-import org.jetbrains.kotlin.resolve.scopes.MemberScope
 import org.jetbrains.kotlin.serialization.KonanDescriptorSerializer
-import org.jetbrains.kotlin.serialization.KonanLinkData
-import org.jetbrains.kotlin.serialization.KonanLinkData.*
-import org.jetbrains.kotlin.serialization.ProtoBuf
-import org.jetbrains.kotlin.serialization.deserialization.*
-import org.jetbrains.kotlin.storage.LockBasedStorageManager
-import org.jetbrains.kotlin.storage.StorageManager
-import org.jetbrains.kotlin.types.KotlinType
-import org.jetbrains.kotlin.types.SimpleType
-import java.util.zip.GZIPInputStream
-import java.util.zip.GZIPOutputStream
-import java.io.InputStream
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
 
 /*
  * This is Konan specific part of public descriptor 
@@ -67,107 +41,21 @@ import java.io.ByteArrayOutputStream
  * with MemberDeserializer class.
  */
 
-/* ------------ Deserializer part ------------------------------------------*/
+internal class KonanSerializationUtil(val context: Context, metadataVersion: BinaryVersion) {
 
-object NullFlexibleTypeDeserializer : FlexibleTypeDeserializer {
-    override fun create(proto: ProtoBuf.Type, flexibleId: String, 
-        lowerBound: SimpleType, upperBound: SimpleType): KotlinType {
-            error("Illegal use of flexible type deserializer.")
-        }
-}
-
-fun createKonanPackageFragmentProvider(
-        reader: KonanLibraryReader,
-        fragmentNames: List<String>,
-        storageManager: StorageManager, module: ModuleDescriptor,
-        configuration: DeserializationConfiguration): PackageFragmentProvider {
-
-    val packageFragments = fragmentNames.map{ 
-        KonanPackageFragment(it, reader, storageManager, module)
-    }
-
-    val interopLibrary = createInteropLibrary(reader)
-
-    val syntheticInteropPackageFragments =
-            interopLibrary?.createSyntheticPackages(module, packageFragments) ?: emptyList()
-
-    val provider = PackageFragmentProviderImpl(packageFragments + syntheticInteropPackageFragments)
-
-    val notFoundClasses = NotFoundClasses(storageManager, module)
-
-    val annotationAndConstantLoader = AnnotationAndConstantLoaderImpl(module, notFoundClasses, KonanSerializerProtocol)
-
-    val components = DeserializationComponents(
-        storageManager, module, configuration, 
-        DeserializedClassDataFinder(provider),
-        annotationAndConstantLoader,
-        provider, 
-        LocalClassifierTypeSettings.Default, 
-        ErrorReporter.DO_NOTHING,
-        LookupTracker.DO_NOTHING, NullFlexibleTypeDeserializer,
-        emptyList(), notFoundClasses, ContractDeserializer.DEFAULT)
-
-        for (packageFragment in packageFragments) {
-            packageFragment.components = components
-        }
-
-    return provider
-}
-
-public fun parsePackageFragment(packageData: ByteArray): PackageFragment =
-    PackageFragment.parseFrom(packageData, 
-        KonanSerializerProtocol.extensionRegistry)
-
-public fun parseModuleHeader(libraryData: ByteArray): Library =
-    Library.parseFrom(libraryData, 
-        KonanSerializerProtocol.extensionRegistry)
-
-public fun emptyPackages(libraryData: ByteArray) 
-    = parseModuleHeader(libraryData).emptyPackageList
-
-internal fun deserializeModule(languageVersionSettings: LanguageVersionSettings,
-                               reader: KonanLibraryReader): ModuleDescriptorImpl {
-
-    val libraryProto = parseModuleHeader(reader.moduleHeaderData)
-
-    val moduleName = libraryProto.moduleName
-
-    val storageManager = LockBasedStorageManager()
-    val moduleDescriptor = createKonanModuleDescriptor(
-            Name.special(moduleName), storageManager,
-            origin = DeserializedKonanModule(reader)
-    )
-    val deserializationConfiguration = CompilerDeserializationConfiguration(languageVersionSettings)
-
-    val provider = createKonanPackageFragmentProvider(
-            reader,
-            libraryProto.packageFragmentNameList,
-            storageManager,
-            moduleDescriptor, deserializationConfiguration)
-
-    moduleDescriptor.initialize(provider)
-
-    return moduleDescriptor
-}
-
-
-/* ------------ Serializer part ------------------------------------------*/
-
-internal class KonanSerializationUtil(val context: Context) {
-
-    val serializerExtension = KonanSerializerExtension(context)
-    val topSerializer = KonanDescriptorSerializer.createTopLevel(serializerExtension)
+    val serializerExtension = KonanSerializerExtension(context, metadataVersion)
+    val topSerializer = KonanDescriptorSerializer.createTopLevel(context, serializerExtension)
     var classSerializer: KonanDescriptorSerializer = topSerializer
 
     fun serializeClass(packageName: FqName,
-        builder: KonanLinkData.Classes.Builder,  
+        builder: KonanProtoBuf.LinkDataClasses.Builder,
         classDescriptor: ClassDescriptor) {
 
         val previousSerializer = classSerializer
 
         // TODO: this is to filter out object{}. Change me.
         if (classDescriptor.isExported()) 
-            classSerializer = KonanDescriptorSerializer.create(classDescriptor, serializerExtension)
+            classSerializer = KonanDescriptorSerializer.create(context, classDescriptor, serializerExtension)
 
         val classProto = classSerializer.classProto(classDescriptor).build()
             ?: error("Class not serialized: $classDescriptor")
@@ -184,7 +72,7 @@ internal class KonanSerializationUtil(val context: Context) {
     }
 
     fun serializeClasses(packageName: FqName, 
-        builder: KonanLinkData.Classes.Builder, 
+        builder: KonanProtoBuf.LinkDataClasses.Builder,
         descriptors: Collection<DeclarationDescriptor>) {
 
         for (descriptor in descriptors) {
@@ -194,8 +82,8 @@ internal class KonanSerializationUtil(val context: Context) {
         }
     }
 
-    fun serializePackage(fqName: FqName, module: ModuleDescriptor) : 
-        KonanLinkData.PackageFragment? {
+    fun serializePackage(fqName: FqName, module: ModuleDescriptor) :
+            KonanProtoBuf.LinkDataPackageFragment? {
 
         // TODO: ModuleDescriptor should be able to return
         // the package only with the contents of that module, without dependencies
@@ -206,14 +94,14 @@ internal class KonanSerializationUtil(val context: Context) {
         val classifierDescriptors = KonanDescriptorSerializer.sort(
                 fragments.flatMap {
                     it.getMemberScope().getContributedDescriptors(DescriptorKindFilter.CLASSIFIERS)
-                }
+                }.filter { !it.isExpectMember }
         )
 
         val members = fragments.flatMap { fragment ->
             DescriptorUtils.getAllDescriptors(fragment.getMemberScope())
-        }
+        }.filter { !it.isExpectMember }
 
-        val classesBuilder = KonanLinkData.Classes.newBuilder()
+        val classesBuilder = KonanProtoBuf.LinkDataClasses.newBuilder()
 
         serializeClasses(fqName, classesBuilder, classifierDescriptors)
         val classesProto = classesBuilder.build()
@@ -225,7 +113,7 @@ internal class KonanSerializationUtil(val context: Context) {
         val (stringTableProto, nameTableProto) = strings.buildProto()
 
         val isEmpty = members.isEmpty() && classifierDescriptors.isEmpty()
-        val fragmentBuilder = KonanLinkData.PackageFragment.newBuilder()
+        val fragmentBuilder = KonanProtoBuf.LinkDataPackageFragment.newBuilder()
 
         val fragmentProto = fragmentBuilder
             .setPackage(packageProto)
@@ -252,7 +140,7 @@ internal class KonanSerializationUtil(val context: Context) {
     }
 
     internal fun serializeModule(moduleDescriptor: ModuleDescriptor): LinkData {
-        val libraryProto = KonanLinkData.Library.newBuilder()
+        val libraryProto = KonanProtoBuf.LinkDataLibrary.newBuilder()
         libraryProto.moduleName = moduleDescriptor.name.asString()
         val fragments = mutableListOf<ByteArray>()
         val fragmentNames = mutableListOf<String>()

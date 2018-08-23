@@ -17,10 +17,14 @@
 package org.jetbrains.kotlin.backend.konan.serialization
 
 import org.jetbrains.kotlin.descriptors.*
+import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.serialization.StringTableImpl
 import org.jetbrains.kotlin.resolve.DescriptorUtils
+import org.jetbrains.kotlin.resolve.descriptorUtil.classId
+import org.jetbrains.kotlin.resolve.descriptorUtil.fqNameSafe
 import org.jetbrains.kotlin.resolve.descriptorUtil.getAllSuperClassifiers
 import org.jetbrains.kotlin.resolve.descriptorUtil.module
+import java.io.OutputStream
 
 class KonanStringTable : StringTableImpl() {
 
@@ -35,20 +39,26 @@ class KonanStringTable : StringTableImpl() {
         }
     }
 
-    override fun getFqNameIndexOfLocalAnonymousClass(descriptor: ClassifierDescriptorWithTypeParameters): Int {
+    override fun getLocalClassIdReplacement(descriptor: ClassifierDescriptorWithTypeParameters): ClassId? {
         return if (descriptor.containingDeclaration is CallableMemberDescriptor) {
             val superClassifiers = descriptor.getAllSuperClassifiers()
                 .mapNotNull { it as ClassifierDescriptorWithTypeParameters }
                 .filter { it != descriptor }
                 .toList()
             if (superClassifiers.size == 1) {
-                    getFqNameIndex(superClassifiers[0])
+                    superClassifiers[0].classId
             } else {
                 val superClass = superClassifiers.find { !DescriptorUtils.isInterface(it) }
-                getFqNameIndex(superClass ?: descriptor.module.builtIns.any)
+                superClass?.classId ?: ClassId.topLevel(descriptor.module.builtIns.any.fqNameSafe)
             }
         } else {
-            super.getFqNameIndexOfLocalAnonymousClass(descriptor)
+            super.getLocalClassIdReplacement(descriptor)
         }
+    }
+
+    fun serializeTo(output: OutputStream) {
+        val (strings, qualifiedNames) = buildProto()
+        strings.writeDelimitedTo(output)
+        qualifiedNames.writeDelimitedTo(output)
     }
 }

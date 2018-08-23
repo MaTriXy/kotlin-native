@@ -16,8 +16,9 @@
 
 package org.jetbrains.kotlin.backend.konan.objcexport
 
-import org.jetbrains.kotlin.backend.konan.Context
+import org.jetbrains.kotlin.backend.konan.descriptors.isArray
 import org.jetbrains.kotlin.backend.konan.descriptors.isInterface
+import org.jetbrains.kotlin.builtins.KotlinBuiltIns
 import org.jetbrains.kotlin.descriptors.*
 import org.jetbrains.kotlin.incremental.components.NoLookupLocation
 import org.jetbrains.kotlin.name.FqName
@@ -27,13 +28,30 @@ import org.jetbrains.kotlin.resolve.descriptorUtil.isSubclassOf
 import org.jetbrains.kotlin.resolve.descriptorUtil.module
 import org.jetbrains.kotlin.resolve.descriptorUtil.parentsWithSelf
 
-internal class ObjCExportNamer(val context: Context, val mapper: ObjCExportMapper) {
+internal class ObjCExportNamer(val moduleDescriptor: ModuleDescriptor,
+        val builtIns: KotlinBuiltIns,
+        val mapper: ObjCExportMapper,
+        private val topLevelNamePrefix: String = moduleDescriptor.namePrefix
+    ) {
     val kotlinAnyName = "KotlinBase"
 
-    private val commonPackageSegments = context.moduleDescriptor.guessMainPackage().pathSegments()
-    private val topLevelNamePrefix = context.moduleDescriptor.namePrefix
+    private val commonPackageSegments = moduleDescriptor.guessMainPackage().pathSegments()
+
+    val mutableSetName = "${topLevelNamePrefix}MutableSet"
+    val mutableMapName = "${topLevelNamePrefix}MutableDictionary"
 
     private val methodSelectors = object : Mapping<FunctionDescriptor, String>() {
+
+        // Try to avoid clashing with critical NSObject instance methods:
+
+        private val reserved = setOf(
+                "retain", "release", "autorelease",
+                "class", "superclass",
+                "hash"
+        )
+
+        override fun reserved(name: String) = name in reserved
+
         override fun conflict(first: FunctionDescriptor, second: FunctionDescriptor): Boolean =
                 !mapper.canHaveSameSelector(first, second)
     }
@@ -57,6 +75,30 @@ internal class ObjCExportNamer(val context: Context, val mapper: ObjCExportMappe
         override fun conflict(first: Any, second: Any): Boolean = true
     }
 
+    private abstract inner class ClassPropertyNameMapping<T : Any> : Mapping<T, String>() {
+
+        // Try to avoid clashing with NSObject class methods:
+
+        private val reserved = setOf(
+                "retain", "release", "autorelease",
+                "initialize", "load", "alloc", "new", "class", "superclass",
+                "classFallbacksForKeyedArchiver", "classForKeyedUnarchiver",
+                "description", "debugDescription", "version", "hash",
+                "useStoredAccessor"
+        )
+
+        override fun reserved(name: String) = name in reserved
+    }
+
+    private val objectInstanceSelectors = object : ClassPropertyNameMapping<ClassDescriptor>() {
+        override fun conflict(first: ClassDescriptor, second: ClassDescriptor) = false
+    }
+
+    private val enumEntrySelectors = object : ClassPropertyNameMapping<ClassDescriptor>() {
+        override fun conflict(first: ClassDescriptor, second: ClassDescriptor) =
+                first.containingDeclaration == second.containingDeclaration
+    }
+
     fun getPackageName(fqName: FqName): String = classNames.getOrPut(fqName) {
         StringBuilder().apply {
             append(topLevelNamePrefix)
@@ -77,7 +119,7 @@ internal class ObjCExportNamer(val context: Context, val mapper: ObjCExportMappe
             StringBuilder().apply {
                 append(topLevelNamePrefix)
 
-                if (descriptor.module != context.moduleDescriptor) {
+                if (descriptor.module != moduleDescriptor) {
                     append(descriptor.module.namePrefix)
                 }
 
@@ -91,23 +133,33 @@ internal class ObjCExportNamer(val context: Context, val mapper: ObjCExportMappe
     fun getSelector(method: FunctionDescriptor): String = methodSelectors.getOrPut(method) {
         assert(mapper.isBaseMethod(method))
 
-        val parameters = mapper.objCValueParameters(method)
+        val parameters = mapper.bridgeMethod(method).valueParametersAssociated(method)
 
         StringBuilder().apply {
-            append(method.mangledName)
+            append(method.getMangledName(forSwift = false))
 
-            parameters.forEachIndexed { index, it ->
-                val name = when {
-                    it is ReceiverParameterDescriptor -> ""
-                    method is PropertySetterDescriptor -> when (parameters.size) {
-                        1 -> ""
-                        else -> "value"
+            parameters.forEachIndexed { index, (bridge, it) ->
+                val name = when (bridge) {
+                    is MethodBridgeValueParameter.Mapped -> when {
+                        it is ReceiverParameterDescriptor -> ""
+                        method is PropertySetterDescriptor -> when (parameters.size) {
+                            1 -> ""
+                            else -> "value"
+                        }
+                        else -> it!!.name.asString()
                     }
-                    else -> it.name.asString()
+                    MethodBridgeValueParameter.ErrorOutParameter -> "error"
+                    is MethodBridgeValueParameter.KotlinResultOutParameter -> "result"
                 }
 
                 if (index == 0) {
-                    if (method is ConstructorDescriptor) append("With")
+                    append(when {
+                        bridge is MethodBridgeValueParameter.ErrorOutParameter ||
+                                bridge is MethodBridgeValueParameter.KotlinResultOutParameter -> "AndReturn"
+
+                        method is ConstructorDescriptor -> "With"
+                        else -> ""
+                    })
                     append(name.capitalize())
                 } else {
                     append(name)
@@ -129,34 +181,35 @@ internal class ObjCExportNamer(val context: Context, val mapper: ObjCExportMappe
     fun getSwiftName(method: FunctionDescriptor): String = methodSwiftNames.getOrPut(method) {
         assert(mapper.isBaseMethod(method))
 
-        val parameters = mapper.objCValueParameters(method)
+        val parameters = mapper.bridgeMethod(method).valueParametersAssociated(method)
         
         StringBuilder().apply {
-            append(method.mangledName)
+            append(method.getMangledName(forSwift = true))
             append("(")
 
-            parameters.forEach {
-                val label = when {
-                    it is ReceiverParameterDescriptor -> "_"
-                    method is PropertySetterDescriptor -> when (parameters.size) {
-                        1 -> "_"
-                        else -> "value"
+            parameters@ for ((bridge, it) in parameters) {
+                val label = when (bridge) {
+                    is MethodBridgeValueParameter.Mapped -> when {
+                        it is ReceiverParameterDescriptor -> "_"
+                        method is PropertySetterDescriptor -> when (parameters.size) {
+                            1 -> "_"
+                            else -> "value"
+                        }
+                        else -> it!!.name.asString()
                     }
-                    else -> it.name.asString()
+                    MethodBridgeValueParameter.ErrorOutParameter -> continue@parameters
+                    is MethodBridgeValueParameter.KotlinResultOutParameter -> "result"
                 }
+
                 append(label)
                 append(":")
             }
 
             append(")")
         }.mangledSequence {
-            if (parameters.isNotEmpty()) {
-                // "foo(label:)" -> "foo(label_:)"
-                insert(lastIndex - 1, '_')
-            } else {
-                // "foo()" -> "foo_()"
-                insert(lastIndex - 2, '_')
-            }
+            // "foo(label:)" -> "foo(label_:)"
+            // "foo()" -> "foo_()"
+            insert(lastIndex - 1, '_')
         }
     }
 
@@ -171,10 +224,36 @@ internal class ObjCExportNamer(val context: Context, val mapper: ObjCExportMappe
         }
     }
 
+    fun getObjectInstanceSelector(descriptor: ClassDescriptor): String {
+        assert(descriptor.kind == ClassKind.OBJECT)
+
+        return objectInstanceSelectors.getOrPut(descriptor) {
+            val name = descriptor.name.asString().decapitalize().mangleIfSpecialFamily("get")
+
+            StringBuilder(name).mangledSequence { append("_") }
+        }
+    }
+
+    fun getEnumEntrySelector(descriptor: ClassDescriptor): String {
+        assert(descriptor.kind == ClassKind.ENUM_ENTRY)
+
+        return enumEntrySelectors.getOrPut(descriptor) {
+            // FOO_BAR_BAZ -> fooBarBaz:
+            val name = descriptor.name.asString().split('_').mapIndexed { index, s ->
+                val lower = s.toLowerCase()
+                if (index == 0) lower else lower.capitalize()
+            }.joinToString("").mangleIfSpecialFamily("the")
+
+            StringBuilder(name).mangledSequence { append("_") }
+        }
+    }
+
     init {
-        val any = context.builtIns.any
+        val any = builtIns.any
 
         classNames.forceAssign(any, kotlinAnyName)
+        classNames.forceAssign(builtIns.mutableSet, mutableSetName)
+        classNames.forceAssign(builtIns.mutableMap, mutableMapName)
 
         fun ClassDescriptor.method(name: String) =
                 this.unsubstitutedMemberScope.getContributedFunctions(
@@ -187,18 +266,18 @@ internal class ObjCExportNamer(val context: Context, val mapper: ObjCExportMappe
         val equals = any.method("equals")
 
         methodSelectors.forceAssign(hashCode, "hash")
-        methodSwiftNames.forceAssign(hashCode, "hash")
+        methodSwiftNames.forceAssign(hashCode, "hash()")
 
         methodSelectors.forceAssign(toString, "description")
-        methodSwiftNames.forceAssign(toString, "description")
+        methodSwiftNames.forceAssign(toString, "description()")
 
         methodSelectors.forceAssign(equals, "isEqual:")
         methodSwiftNames.forceAssign(equals, "isEqual(:)")
     }
 
-    private val FunctionDescriptor.mangledName: String get() {
+    private fun FunctionDescriptor.getMangledName(forSwift: Boolean): String {
         if (this is ConstructorDescriptor) {
-            return "init"
+            return if (this.constructedClass.isArray && !forSwift) "array" else "init"
         }
 
         val candidate = when (this) {
@@ -207,18 +286,22 @@ internal class ObjCExportNamer(val context: Context, val mapper: ObjCExportMappe
             else -> this.name.asString()
         }
 
-        val trimmedCandidate = candidate.dropWhile { it == '_' }
+        return candidate.mangleIfSpecialFamily("do")
+    }
+
+    private fun String.mangleIfSpecialFamily(prefix: String): String {
+        val trimmed = this.dropWhile { it == '_' }
         for (family in listOf("alloc", "copy", "mutableCopy", "new", "init")) {
-            if (trimmedCandidate.startsWithWords(family)) {
+            if (trimmed.startsWithWords(family)) {
                 // Then method can be detected as having special family by Objective-C compiler.
                 // mangle the name:
-                return "do" + candidate.capitalize()
+                return prefix + this.capitalize()
             }
         }
 
         // TODO: handle clashes with NSObject methods etc.
 
-        return candidate
+        return this
     }
 
     private fun String.startsWithWords(words: String) = this.startsWith(words) &&
@@ -229,6 +312,7 @@ internal class ObjCExportNamer(val context: Context, val mapper: ObjCExportMappe
         private val nameToElements = mutableMapOf<N, MutableList<T>>()
 
         abstract fun conflict(first: T, second: T): Boolean
+        open fun reserved(name: N) = false
 
         fun getOrPut(element: T, nameCandidates: () -> Sequence<N>): N {
             getIfAssigned(element)?.let { return it }
@@ -246,6 +330,8 @@ internal class ObjCExportNamer(val context: Context, val mapper: ObjCExportMappe
 
         fun tryAssign(element: T, name: N): Boolean {
             if (element in elementToName) error(element)
+
+            if (reserved(name)) return false
 
             val elements = nameToElements.getOrPut(name) { mutableListOf() }
             if (elements.any { conflict(element, it) }) {
@@ -276,9 +362,6 @@ private inline fun StringBuilder.mangledSequence(crossinline mangle: StringBuild
         }
 
 private fun ObjCExportMapper.canHaveCommonSubtype(first: ClassDescriptor, second: ClassDescriptor): Boolean {
-    assert(shouldBeExposed(first))
-    assert(shouldBeExposed(second))
-
     if (first.isSubclassOf(second) || second.isSubclassOf(first)) {
         return true
     }
@@ -337,8 +420,8 @@ private fun ObjCExportMapper.canHaveSameSelector(first: FunctionDescriptor, seco
 
     // Otherwise both are Kotlin member methods should merge in any common subclass.
 
-    // Taking into account the conditions above, check if methods have the same ABI:
-    return bridgeReturnType(first) == bridgeReturnType(second)
+    // Check if methods have the same bridge (and thus the same ABI):
+    return bridgeMethod(first) == bridgeMethod(second)
 }
 
 private fun ObjCExportMapper.canHaveSameName(first: PropertyDescriptor, second: PropertyDescriptor): Boolean {
@@ -359,7 +442,7 @@ private fun ObjCExportMapper.canHaveSameName(first: PropertyDescriptor, second: 
     return bridgePropertyType(first) == bridgePropertyType(second)
 }
 
-private val ModuleDescriptor.namePrefix: String get() {
+internal val ModuleDescriptor.namePrefix: String get() {
     // <fooBar> -> FooBar
     val moduleName = this.name.asString().let { it.substring(1, it.lastIndex) }.capitalize()
 

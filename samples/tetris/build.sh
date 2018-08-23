@@ -4,7 +4,8 @@ DIR=$(cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd )
 
 source "$DIR/../konan.sh"
 
-DEPS="$HOME/.konan/dependencies"
+# KONAN_DEPS is set in konan.sh
+DEPS="$KONAN_DEPS"
 
 CFLAGS_macbook=-I$HOME/Library/Frameworks/SDL2.framework/Headers
 LINKER_ARGS_macbook="-F $HOME/Library/Frameworks -framework SDL2"
@@ -18,12 +19,6 @@ COMPILER_ARGS_macbook=
 CFLAGS_linux=-I/usr/include/SDL2
 LINKER_ARGS_linux="-L/usr/lib/x86_64-linux-gnu -lSDL2"
 COMPILER_ARGS_linux=
-
-CFLAGS_iphone=-I$DEPS/target-sysroot-2-darwin-ios/System/Library/Frameworks/SDL2.framework/Headers
-LINKER_ARGS_iphone="-framework SDL2 \
--framework AVFoundation -framework CoreGraphics -framework CoreMotion -framework Foundation -framework GameController \
--framework AudioToolbox -framework OpenGLES -framework QuartzCore -framework UIKit"
-COMPILER_ARGS_iphone=-nomain
 
 CFLAGS_raspberrypi=-I$DEPS/target-sysroot-1-raspberrypi/usr/include/SDL2
 LINKER_ARGS_raspberrypi="-lSDL2"
@@ -49,7 +44,7 @@ mkdir -p $DIR/build/bin/
 
 cinterop -def $DIR/src/main/c_interop/sdl.def -compilerOpts "$CFLAGS" -target $TARGET -o $DIR/build/c_interop/sdl || exit 1
 
-konanc $COMPILER_ARGS -target $TARGET $DIR/src/main/kotlin/Tetris.kt \
+konanc $COMPILER_ARGS -target $TARGET $DIR/src/main/kotlin \
        -library $DIR/build/c_interop/sdl -linkerOpts "$LINKER_ARGS" \
        -o $DIR/build/bin/Tetris || exit 1
 

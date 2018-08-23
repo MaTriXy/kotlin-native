@@ -47,7 +47,7 @@ void CheckInstance(const ObjHeader* obj, const TypeInfo* type_info) {
   if (IsInstance(obj, type_info)) {
     return;
   }
-  ThrowClassCastException();
+  ThrowClassCastException(obj, type_info);
 }
 
 KBoolean Kotlin_TypeInfo_isInstance(KConstRef obj, KNativePtr typeInfo) {
@@ -60,6 +60,16 @@ OBJ_GETTER(Kotlin_TypeInfo_getPackageName, KNativePtr typeInfo) {
 
 OBJ_GETTER(Kotlin_TypeInfo_getRelativeName, KNativePtr typeInfo) {
   RETURN_OBJ(reinterpret_cast<const TypeInfo*>(typeInfo)->relativeName_);
+}
+
+bool IsSubInterface(const TypeInfo* thiz, const TypeInfo* other) {
+  for (int i = 0; i < thiz->implementedInterfacesCount_; ++i) {
+    if (thiz->implementedInterfaces_[i] == other) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 }  // extern "C"

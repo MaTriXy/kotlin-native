@@ -19,7 +19,9 @@ package org.jetbrains.kotlin.native.interop.gen
 val kotlinKeywords = setOf(
         "as", "break", "class", "continue", "do", "dynamic", "else", "false", "for", "fun", "if", "in",
         "interface", "is", "null", "object", "package", "return", "super", "this", "throw",
-        "true", "try", "typealias", "val", "var", "when", "while"
+        "true", "try", "typealias", "val", "var", "when", "while",
+        // While not technically keywords, those shall be escaped as well.
+        "_", "__", "___"
 )
 
 /**
@@ -36,7 +38,7 @@ typealias KotlinExpression = String
  * For this identifier constructs the string to be parsed by Kotlin as `SimpleName`
  * defined [here](https://kotlinlang.org/docs/reference/grammar.html#SimpleName).
  */
-fun String.asSimpleName(): String = if (this in kotlinKeywords) {
+fun String.asSimpleName(): String = if (this in kotlinKeywords || this.contains("$")) {
     "`$this`"
 } else {
     this
@@ -46,21 +48,27 @@ fun String.asSimpleName(): String = if (this in kotlinKeywords) {
  * Returns the expression to be parsed by Kotlin as string literal with given contents,
  * i.e. transforms `foo$bar` to `"foo\$bar"`.
  */
-fun String.quoteAsKotlinLiteral(): KotlinExpression {
-    val sb = StringBuilder()
-    sb.append('"')
+fun String.quoteAsKotlinLiteral(): KotlinExpression = buildString {
+    append('"')
 
-    this.forEach { c ->
-        val escaped = when (c) {
-            in 'a' .. 'z', in 'A' .. 'Z', in '0' .. '9', '_', '@', ':', '{', '}', '=', '[', ']', '^', '#', '*' -> c.toString()
-            '$' -> "\\$"
-            else -> "\\u" + "%04X".format(c.toInt()) // TODO: improve result readability by preserving more characters.
+    this@quoteAsKotlinLiteral.forEach { c ->
+        when (c) {
+            in charactersAllowedInKotlinStringLiterals -> append(c)
+            '$' -> append("\\$")
+            else -> append("\\u" + "%04X".format(c.toInt()))
         }
-        sb.append(escaped)
     }
 
-    sb.append('"')
-    return sb.toString()
+    append('"')
+}
+
+// TODO: improve literal readability by preserving more characters.
+
+private val charactersAllowedInKotlinStringLiterals: Set<Char> = mutableSetOf<Char>().apply {
+    addAll('a' .. 'z')
+    addAll('A' .. 'Z')
+    addAll('0' .. '9')
+    addAll(listOf('_', '@', ':', ';', '.', ',', '{', '}', '=', '[', ']', '^', '#', '*', ' '))
 }
 
 fun block(header: String, lines: Iterable<String>) = block(header, lines.asSequence())
@@ -75,3 +83,10 @@ val annotationForUnableToImport
 
 fun String.applyToStrings(vararg arguments: String) =
         "${this}(${arguments.joinToString { it.quoteAsKotlinLiteral() }})"
+
+fun List<KotlinParameter>.renderParameters(scope: KotlinScope) = buildString {
+    this@renderParameters.renderParametersTo(scope, this)
+}
+
+fun List<KotlinParameter>.renderParametersTo(scope: KotlinScope, buffer: Appendable) =
+        this.joinTo(buffer, ", ") { it.render(scope) }

@@ -17,8 +17,8 @@
 package org.jetbrains.kotlin.backend.konan.llvm.objc
 
 import llvm.*
-import org.jetbrains.kotlin.backend.konan.descriptors.CurrentKonanModule
 import org.jetbrains.kotlin.backend.konan.llvm.*
+import org.jetbrains.kotlin.descriptors.konan.CurrentKonanModuleOrigin
 
 /**
  * This class provides methods to generate Objective-C RTTI and other data.
@@ -70,6 +70,11 @@ internal class ObjCDataGenerator(val codegen: CodeGenerator) {
 
     val classObjectType = codegen.runtime.getStructType("_class_t")
 
+    fun exportClass(name: String) {
+        context.llvm.usedGlobals += getClassGlobal(name, isMetaclass = false).llvm
+        context.llvm.usedGlobals += getClassGlobal(name, isMetaclass = true).llvm
+    }
+
     private fun getClassGlobal(name: String, isMetaclass: Boolean): ConstPointer {
         val prefix = if (isMetaclass) {
             "OBJC_METACLASS_\$_"
@@ -81,7 +86,7 @@ internal class ObjCDataGenerator(val codegen: CodeGenerator) {
 
         // TODO: refactor usages and use [Global] class.
         val llvmGlobal = LLVMGetNamedGlobal(context.llvmModule, globalName) ?:
-                codegen.importGlobal(globalName, classObjectType, CurrentKonanModule)
+                codegen.importGlobal(globalName, classObjectType, CurrentKonanModuleOrigin)
 
         return constPointer(llvmGlobal)
     }
@@ -90,7 +95,7 @@ internal class ObjCDataGenerator(val codegen: CodeGenerator) {
             codegen.importGlobal(
                     "_objc_empty_cache",
                     codegen.runtime.getStructType("_objc_cache"),
-                    CurrentKonanModule
+                    CurrentKonanModuleOrigin
             )
     )
 

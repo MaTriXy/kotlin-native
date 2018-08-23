@@ -30,7 +30,7 @@ import org.jetbrains.kotlin.descriptors.impl.LocalVariableDescriptor
 import org.jetbrains.kotlin.descriptors.impl.PropertyDescriptorImpl
 import org.jetbrains.kotlin.ir.descriptors.IrTemporaryVariableDescriptor
 import org.jetbrains.kotlin.serialization.KonanDescriptorSerializer
-import org.jetbrains.kotlin.serialization.KonanIr
+import org.jetbrains.kotlin.metadata.KonanIr
 import org.jetbrains.kotlin.types.KotlinType
 
 /* 
@@ -97,8 +97,9 @@ internal class LocalDeclarationSerializer(val context: Context, val rootFunction
     // serialization to serialize variables for now.
     // Need to introduce an extension protobuf message
     // and serialize variables directly.
-    fun variableAsProperty(variable: VariableDescriptor): PropertyDescriptor {
+    private fun variableAsProperty(variable: VariableDescriptor): PropertyDescriptor {
 
+        @Suppress("DEPRECATION")
         val isDelegated = when (variable) {
             is LocalVariableDescriptor -> variable.isDelegated
             is IrTemporaryVariableDescriptor -> false

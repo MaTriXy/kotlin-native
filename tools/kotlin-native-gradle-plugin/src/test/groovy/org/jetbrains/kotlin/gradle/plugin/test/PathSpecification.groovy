@@ -1,11 +1,67 @@
+/*
+ * Copyright 2010-2018 JetBrains s.r.o.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package org.jetbrains.kotlin.gradle.plugin.test
 
 import org.gradle.testkit.runner.TaskOutcome
+import org.jetbrains.kotlin.konan.target.PlatformManager
 
 class PathSpecification extends BaseKonanSpecification {
 
     boolean fileExists(KonanProject project, String path) {
         project.konanBuildDir.toPath().resolve(path).toFile().exists()
+    }
+
+    def platformManager = new PlatformManager()
+
+    def 'Plugin should provide a correct path to the artifacts created'() {
+        expect:
+        def project = KonanProject.createEmpty(
+                projectDirectory,
+                platformManager.enabled.collect { t -> t.visibleName }
+        ) { KonanProject it ->
+            it.generateSrcFile("main.kt")
+            it.generateDefFile("interop.def", "")
+            it.buildFile.append("""
+                konanArtifacts {
+                    program('program')
+                    library('library')
+                    bitcode('bitcode')
+                    interop('interop')
+                    framework('framework')
+                    dynamic('dynamic')
+                }
+
+                task checkArtifacts(type: DefaultTask) {
+                    dependsOn(':build')
+                    doLast {
+                        for(artifact in konanArtifacts) {
+                            for (target in artifact) {
+                                if (!target.artifact.exists()) throw new Exception("Artifact doesn't exist. Type: \${artifact.name}, target: \${target.target}")
+                            }
+                        }
+                        for (target in konanArtifacts.dynamic) {
+                            if (!target.headerFile.exists()) throw new Exception("Header file doesn't exist. Target: \${target.target}")
+                        }
+                    }
+                }
+            """.stripIndent())
+        }
+        project.createRunner().withArguments("checkArtifacts").build()
+
     }
 
     def 'Plugin should create all necessary directories'() {
@@ -30,9 +86,10 @@ class PathSpecification extends BaseKonanSpecification {
         def project = KonanProject.create(projectDirectory)
         project.propertiesFile.write("konan.home=fakepath")
         def result = project.createRunner().withArguments('build').buildAndFail()
+        def task = result.task(project.defaultCompilationTask())
 
         then:
-        result.task(project.defaultCompilationTask()).outcome == TaskOutcome.FAILED
+        task == null || task.outcome == TaskOutcome.FAILED
     }
 
     def 'Plugin should stop building if the stub generator classpath is empty'() {
@@ -40,9 +97,10 @@ class PathSpecification extends BaseKonanSpecification {
         def project = KonanProject.createWithInterop(projectDirectory)
         project.propertiesFile.write("konan.home=fakepath")
         def result = project.createRunner().withArguments('build').buildAndFail()
+        def task = result.task(project.compilationTask(KonanProject.DEFAULT_INTEROP_NAME))
 
         then:
-        result.task(project.compilationTask(KonanProject.DEFAULT_INTEROP_NAME)).outcome == TaskOutcome.FAILED
+        task == null || task.outcome == TaskOutcome.FAILED
     }
 
     def 'Plugin should remove custom output directories'() {

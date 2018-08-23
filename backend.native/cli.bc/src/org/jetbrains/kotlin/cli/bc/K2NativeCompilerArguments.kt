@@ -18,6 +18,8 @@ package org.jetbrains.kotlin.cli.bc
 
 import org.jetbrains.kotlin.cli.common.arguments.CommonCompilerArguments
 import org.jetbrains.kotlin.cli.common.arguments.Argument
+import org.jetbrains.kotlin.cli.common.messages.MessageCollector
+import org.jetbrains.kotlin.config.LanguageFeature
 
 class K2NativeCompilerArguments : CommonCompilerArguments() {
     // First go the options interesting to the general public.
@@ -75,17 +77,13 @@ class K2NativeCompilerArguments : CommonCompilerArguments() {
     @Argument(value = "-entry", shortName = "-e", valueDescription = "<name>", description = "Qualified entry point name")
     var mainPackage: String? = null
 
-    @Argument(value = "-produce", shortName = "-p", valueDescription = "{program|dynamic|framework|library|bitcode}", description = "Specify output file kind")
+    @Argument(value = "-produce", shortName = "-p",
+            valueDescription = "{program|static|dynamic|framework|library|bitcode}",
+            description = "Specify output file kind")
     var produce: String? = null
-
-    @Argument(value = "-properties", valueDescription = "<path>", description = "Override standard 'konan.properties' location")
-    var propertyFile: String? = null
 
     @Argument(value = "-repo", shortName = "-r", valueDescription = "<path>", description = "Library search path")
     var repositories: Array<String>? = null
-
-    @Argument(value = "-runtime", valueDescription = "<path>", description = "Override standard 'runtime.bc' location")
-    var runtimeFile: String? = null
 
     @Argument(value = "-target", valueDescription = "<target>", description = "Set hardware target")
     var target: String? = null
@@ -124,6 +122,12 @@ class K2NativeCompilerArguments : CommonCompilerArguments() {
     @Argument(value = "--purge_user_libs", description = "Don't link unused libraries even explicitly specified")
     var purgeUserLibs: Boolean = false
 
+    @Argument(value = "--runtime", valueDescription = "<path>", description = "Override standard 'runtime.bc' location")
+    var runtimeFile: String? = null
+
+    @Argument(value = "--temporary_files_dir", valueDescription = "<path>", description = "Save temporary files to the given directory")
+    var temporaryFilesDir: String? = null
+
     @Argument(value = "--time", description = "Report execution time for compiler phases")
     var timePhases: Boolean = false
 
@@ -139,5 +143,16 @@ class K2NativeCompilerArguments : CommonCompilerArguments() {
     @Argument(value = "--verify_ir", description = "Verify IR")
     var verifyIr: Boolean = false
 
+    @Argument(
+            value = "-friend-modules",
+            valueDescription = "<path>",
+            description = "Paths to friend modules"
+    )
+    var friendModules: String? = null
+
+    override fun configureLanguageFeatures(collector: MessageCollector) = super.configureLanguageFeatures(collector).also {
+        it[LanguageFeature.InlineClasses] = LanguageFeature.State.ENABLED // TODO: remove after updating to 1.3.
+        it[LanguageFeature.ReleaseCoroutines] = LanguageFeature.State.DISABLED
+    }
 }
 

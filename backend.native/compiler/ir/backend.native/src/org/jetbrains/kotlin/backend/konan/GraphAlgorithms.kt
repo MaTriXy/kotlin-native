@@ -18,8 +18,8 @@ package org.jetbrains.kotlin.backend.konan
 
 internal interface DirectedGraphNode<out K> {
     val key: K
-    val directEdges: List<K>
-    val reversedEdges: List<K>
+    val directEdges: List<K>?
+    val reversedEdges: List<K>?
 }
 
 internal interface DirectedGraph<K, out N: DirectedGraphNode<K>> {
@@ -31,7 +31,7 @@ internal class DirectedGraphMultiNode<out K>(val nodes: Set<K>)
 
 internal class DirectedGraphCondensation<out K>(val topologicalOrder: List<DirectedGraphMultiNode<K>>)
 
-internal class DirectedGraphCondensationBuilder<K, out N: DirectedGraphNode<K>>(val graph: DirectedGraph<K, N>) {
+internal class DirectedGraphCondensationBuilder<K, out N: DirectedGraphNode<K>>(private val graph: DirectedGraph<K, N>) {
     private val visited = mutableSetOf<K>()
     private val order = mutableListOf<N>()
     private val nodeToMultiNodeMap = mutableMapOf<N, DirectedGraphMultiNode<K>>()
@@ -65,12 +65,12 @@ internal class DirectedGraphCondensationBuilder<K, out N: DirectedGraphNode<K>>(
                 findMultiNodesOrder(it)
         }
 
-        return DirectedGraphCondensation(multiNodesOrder)
+        return DirectedGraphCondensation(multiNodesOrder.reversed())
     }
 
     private fun findOrder(node: N) {
         visited += node.key
-        node.directEdges.forEach {
+        node.directEdges?.forEach {
             if (!visited.contains(it))
                 findOrder(graph.get(it))
         }
@@ -80,7 +80,7 @@ internal class DirectedGraphCondensationBuilder<K, out N: DirectedGraphNode<K>>(
     private fun paint(node: N, multiNode: MutableSet<K>) {
         visited += node.key
         multiNode += node.key
-        node.reversedEdges.forEach {
+        node.reversedEdges?.forEach {
             if (!visited.contains(it))
                 paint(graph.get(it), multiNode)
         }
@@ -89,7 +89,7 @@ internal class DirectedGraphCondensationBuilder<K, out N: DirectedGraphNode<K>>(
     private fun findMultiNodesOrder(node: DirectedGraphMultiNode<K>) {
         visited.addAll(node.nodes)
         node.nodes.forEach {
-            graph.get(it).directEdges.forEach {
+            graph.get(it).directEdges?.forEach {
                 if (!visited.contains(it))
                     findMultiNodesOrder(nodeToMultiNodeMap[graph.get(it)]!!)
             }

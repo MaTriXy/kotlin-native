@@ -32,11 +32,16 @@
 
 #include <chrono>
 
+#include "Common.h"
 #include "Porting.h"
 
-#ifdef KONAN_WASM
-extern "C" void Konan_abort(const char*);
-extern "C" void Konan_exit(int32_t status);
+#if KONAN_WASM || KONAN_ZEPHYR
+extern "C" RUNTIME_NORETURN void Konan_abort(const char*);
+extern "C" RUNTIME_NORETURN void Konan_exit(int32_t status);
+#endif
+#ifdef KONAN_ZEPHYR
+// In Zephyr's Newlib strnlen(3) is not included from string.h by default.
+extern "C" size_t strnlen(const char* buffer, size_t maxSize);
 #endif
 
 namespace konan {
@@ -69,10 +74,35 @@ void consoleErrorUtf8(const void* utf8, uint32_t sizeBytes) {
 #endif
 }
 
-uint32_t consoleReadUtf8(void* utf8, uint32_t maxSizeBytes) {
-  char* result = ::fgets(reinterpret_cast<char*>(utf8), maxSizeBytes - 1, stdin);
-  if (result == nullptr) return 0;
-  return ::strlen(result);
+int32_t consoleReadUtf8(void* utf8, uint32_t maxSizeBytes) {
+#ifdef KONAN_ZEPHYR
+  return 0;
+#else
+#ifdef KONAN_WASM
+  FILE* file = nullptr;
+#else
+  FILE* file = stdin;
+#endif
+  char* result = ::fgets(reinterpret_cast<char*>(utf8), maxSizeBytes - 1, file);
+  if (result == nullptr) return -1;
+  int32_t length = ::strlen(result);
+  // fgets reads until EOF or newline so we need to remove linefeeds.
+  char* current = result + length - 1;
+  bool isTrimming = true;
+  while (current >= result && isTrimming) {
+    switch (*current) {
+      case '\n':
+      case '\r':
+        *current = 0;
+        length--;
+        break;
+      default:
+        isTrimming = false;
+    }
+    current--;
+  }
+  return length;
+#endif
 }
 
 #if KONAN_INTERNAL_SNPRINTF
@@ -124,7 +154,7 @@ static void onThreadExitInit() {
 
 void onThreadExit(void (*destructor)()) {
 #if KONAN_NO_THREADS
-#ifdef KONAN_WASM
+#if KONAN_WASM || KONAN_ZEPHYR
   // No way to do that.
 #else
 #error "How to do onThreadExit()?"
@@ -141,11 +171,11 @@ void onThreadExit(void (*destructor)()) {
 }
 
 // Process execution.
-void abort() {
+void abort(void) {
   ::abort();
 }
 
-#ifdef KONAN_WASM
+#if KONAN_WASM || KONAN_ZEPHYR
 void exit(int32_t status) {
   Konan_exit(status);
 }
@@ -159,7 +189,7 @@ void exit(int32_t status) {
 // memcpy/memmove are not here intentionally, as frequently implemented/optimized
 // by C compiler.
 void* memmem(const void *big, size_t bigLen, const void *little, size_t littleLen) {
-#if KONAN_WINDOWS || KONAN_WASM
+#if KONAN_NO_MEMMEM
   for (size_t i = 0; i + littleLen <= bigLen; ++i) {
     void* pos = ((char*)big) + i;
     if (::memcmp(little, pos, littleLen) == 0) return pos;
@@ -205,19 +235,29 @@ void free(void* pointer) {
 
 #if KONAN_INTERNAL_NOW
 
+#ifdef KONAN_ZEPHYR
+void Konan_date_now(uint64_t* arg) {
+    // TODO: so how will we support time for embedded?
+    *arg = 0LL;
+}
+#else
 extern "C" void Konan_date_now(uint64_t*);
+#endif
 
 uint64_t getTimeMillis() {
     uint64_t now;
     Konan_date_now(&now);
     return now;
 }
+
 uint64_t getTimeMicros() {
     return getTimeMillis() * 1000ULL;
 }
+
 uint64_t getTimeNanos() {
     return getTimeMillis() * 1000000ULL;
 }
+
 #else
 // Time operations.
 using namespace std::chrono;
@@ -238,46 +278,51 @@ uint64_t getTimeMicros() {
 #if KONAN_INTERNAL_DLMALLOC
 // This function is being called when memory allocator needs more RAM.
 
-#ifdef KONAN_WASM
+#if KONAN_WASM
 
-// This one is an interface to query module.env.memory.buffer.byteLength
-extern "C" unsigned long Konan_heap_upper();
-extern "C" unsigned long Konan_heap_lower();
-extern "C" unsigned long Konan_heap_grow(unsigned long);
+namespace {
 
-#define MFAIL ((void*) ~(size_t)0)
-#define WASM_PAGESIZE_EXPONENT 16
-#define WASM_PAGESIZE  (1u << WASM_PAGESIZE_EXPONENT)
-#define WASM_PAGEMASK ((WASM_PAGESIZE-(size_t)1))
-#define PAGE_ALIGN(value) ((value + WASM_PAGEMASK) & ~(WASM_PAGEMASK))
-#define IN_PAGES(value) (value >> WASM_PAGESIZE_EXPONENT)
+constexpr uint32_t MFAIL = ~(uint32_t)0;
+constexpr uint32_t WASM_PAGESIZE_EXPONENT = 16;
+constexpr uint32_t WASM_PAGESIZE = 1u << WASM_PAGESIZE_EXPONENT;
+constexpr uint32_t WASM_PAGEMASK = WASM_PAGESIZE-1;
 
-void* moreCore(int size) {
-    static int initialized = 0;
-    static void* sbrk_top = MFAIL;
-    static void* upperHeapLimit = MFAIL;
+uint32_t pageAlign(int32_t value) {
+  return (value + WASM_PAGEMASK) & ~ (WASM_PAGEMASK);
+}
 
-    if (!initialized) {
-        sbrk_top = (void*)PAGE_ALIGN(Konan_heap_lower());
-        initialized = 1;
+uint32_t inBytes(uint32_t pageCount) {
+  return pageCount << WASM_PAGESIZE_EXPONENT;
+}
+
+uint32_t inPages(uint32_t value) {
+  return value >> WASM_PAGESIZE_EXPONENT;
+}
+
+extern "C" void Konan_notify_memory_grow();
+
+uint32_t memorySize() {
+  return __builtin_wasm_current_memory();
+}
+
+int32_t growMemory(uint32_t delta) {
+  int32_t oldLength = __builtin_wasm_grow_memory(delta);
+  Konan_notify_memory_grow();
+  return oldLength;
+}
+
+}
+
+void* moreCore(int32_t delta) {
+  uint32_t top = inBytes(memorySize());
+  if (delta > 0) {
+    if (growMemory(inPages(pageAlign(delta))) == 0) {
+      return (void *) MFAIL;
     }
-
-    if (size == 0) {
-        return sbrk_top;
-    } else if (size < 0) {
-        return MFAIL;
-    }
-
-    size = PAGE_ALIGN(size);
-
-    void* old_sbrk_top = sbrk_top;
-    long excess = (char*)sbrk_top + size - (char*)Konan_heap_upper();
-    if (excess > 0) {
-        Konan_heap_grow(IN_PAGES(PAGE_ALIGN(excess)));
-    }
-    sbrk_top = (char*)sbrk_top + size;
-
-    return old_sbrk_top;
+  } else if (delta < 0) {
+    return (void *) MFAIL;
+  }
+  return (void *) top;
 }
 
 // dlmalloc wants to know the page size.
@@ -299,10 +344,15 @@ long getpagesize() {
 }  // namespace konan
 
 extern "C" {
-#ifdef KONAN_WASM
-
-    // TODO: get rid of these.
+// TODO: get rid of these.
+#if (KONAN_WASM || KONAN_ZEPHYR)
+    void _ZNKSt3__120__vector_base_commonILb1EE20__throw_length_errorEv(void) {
+        Konan_abort("TODO: throw_length_error not implemented.");
+    }
     void _ZNKSt3__220__vector_base_commonILb1EE20__throw_length_errorEv(void) {
+        Konan_abort("TODO: throw_length_error not implemented.");
+    }
+    void _ZNKSt3__121__basic_string_commonILb1EE20__throw_length_errorEv(void) {
         Konan_abort("TODO: throw_length_error not implemented.");
     }
     void _ZNKSt3__221__basic_string_commonILb1EE20__throw_length_errorEv(void) {
@@ -331,6 +381,9 @@ extern "C" {
         }
         return prime;
     }
+    int _ZNSt3__112__next_primeEj(unsigned long n) {
+        return _ZNSt3__212__next_primeEj(n);
+    }
     void __assert_fail(const char * assertion, const char * file, unsigned int line, const char * function) {
         char buf[1024];
         konan::snprintf(buf, sizeof(buf), "%s:%d in %s: runtime assert: %s\n", file, line, function, assertion);
@@ -346,9 +399,10 @@ extern "C" {
     double pow(double x, double y) {
         return __builtin_pow(x, y);
     }
+#endif
 
+#ifdef KONAN_WASM
     // Some string.h functions.
-
     void *memcpy(void *dst, const void *src, size_t n) {
         for (long i = 0; i != n; ++i)
             *((char*)dst + i) = *((char*)src + i);
@@ -396,4 +450,9 @@ extern "C" {
     }
 #endif
 
+#ifdef KONAN_ZEPHYR
+    RUNTIME_USED void Konan_abort(const char*) {
+        while(1) {}
+    }
+#endif // KONAN_ZEPHYR
 }

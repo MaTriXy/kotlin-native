@@ -20,9 +20,9 @@ import kotlinx.cinterop.allocArrayOf
 import kotlinx.cinterop.memScoped
 import llvm.*
 import org.jetbrains.kotlin.backend.konan.Context
-import org.jetbrains.kotlin.backend.konan.KonanVersion
+import org.jetbrains.kotlin.konan.KonanVersion
+import org.jetbrains.kotlin.backend.konan.irasdescriptors.FunctionDescriptor
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns
-import org.jetbrains.kotlin.descriptors.FunctionDescriptor
 import org.jetbrains.kotlin.ir.SourceManager.FileEntry
 import org.jetbrains.kotlin.ir.declarations.IrFile
 import org.jetbrains.kotlin.js.descriptorUtils.getJetTypeFqName
@@ -47,20 +47,19 @@ internal object DWARF {
 }
 
 internal class DebugInfo internal constructor(override val context: Context):ContextUtils {
-    val files = mutableMapOf<IrFile, DIFileRef>()
-    val subprograms = mutableMapOf<FunctionDescriptor, DISubprogramRef>()
+    val files = mutableMapOf<String, DIFileRef>()
+    val subprograms = mutableMapOf<LLVMValueRef, DISubprogramRef>()
     var builder: DIBuilderRef? = null
     var module: DIModuleRef? = null
-    var compilationModule: DICompileUnitRef? = null
     var types = mutableMapOf<KotlinType, DITypeOpaqueRef>()
 
     val llvmTypes = mapOf<KotlinType, LLVMTypeRef>(
+            context.builtIns.booleanType to LLVMInt8Type()!!,
             context.builtIns.byteType    to LLVMInt8Type()!!,
             context.builtIns.charType    to LLVMInt8Type()!!,
             context.builtIns.shortType   to LLVMInt16Type()!!,
             context.builtIns.intType     to LLVMInt32Type()!!,
             context.builtIns.longType    to LLVMInt64Type()!!,
-            context.builtIns.booleanType to LLVMInt1Type()!!,
             context.builtIns.floatType   to LLVMFloatType()!!,
             context.builtIns.doubleType  to LLVMDoubleType()!!)
     val intTypes = listOf<KotlinType>(context.builtIns.byteType, context.builtIns.shortType, context.builtIns.intType, context.builtIns.longType)
@@ -110,15 +109,6 @@ internal fun generateDebugInfoHeader(context: Context) {
                 configurationMacro = "",
                 includePath        = "",
                 iSysRoot           = "")
-        context.debugInfo.compilationModule = DICreateCompilationUnit(
-                builder     = context.debugInfo.builder,
-                lang        = DwarfLanguage.DW_LANG_Kotlin.value,
-                File        = path.file,
-                dir         = path.folder,
-                producer    = DWARF.producer,
-                isOptimized = 0,
-                flags       = "",
-                rv          = DWARF.runtimeVersion)
         /* TODO: figure out what here 2 means:
          *
          * 0:b-backend-dwarf:minamoto@minamoto-osx(0)# cat /dev/null | clang -xc -S -emit-llvm -g -o - -
@@ -158,7 +148,8 @@ internal fun KotlinType.dwarfType(context:Context, targetData:LLVMTargetDataRef)
                 classDescriptor != null -> {
                     val type = DICreateStructType(
                             refBuilder    = context.debugInfo.builder,
-                            scope         = context.debugInfo.compilationModule as DIScopeOpaqueRef,
+                            // TODO: here should be DIFile as scope.
+                            scope         = null,
                             name          = "ObjHeader",
                             file          = null,
                             lineNumber    = 0,
@@ -193,8 +184,8 @@ private fun debugInfoBaseType(context:Context, targetData:LLVMTargetDataRef, typ
 
 internal val FunctionDescriptor.types:List<KotlinType>
     get() {
-        val parameters = valueParameters.map{it.type}
-        return if (returnType != null) listOf(returnType!!, *parameters.toTypedArray()) else parameters
+        val parameters = descriptor.valueParameters.map{it.type}
+        return listOf(descriptor.returnType!!, *parameters.toTypedArray())
     }
 
 internal fun KotlinType.size(context:Context) = context.debugInfo.llvmTypeSizes.getOrDefault(this, context.debugInfo.otherTypeSize)
@@ -217,10 +208,15 @@ internal fun KotlinType.encoding(context:Context):DwarfTypeKind = when {
 internal fun alignTo(value:Long, align:Long):Long = (value + align - 1) / align * align
 
 internal fun  FunctionDescriptor.subroutineType(context: Context, llvmTargetData: LLVMTargetDataRef): DISubroutineTypeRef {
+    val types = this@subroutineType.types
+    return subroutineType(context, llvmTargetData, types)
+}
+
+internal fun subroutineType(context: Context, llvmTargetData: LLVMTargetDataRef, types: List<KotlinType>): DISubroutineTypeRef {
     return memScoped {
         DICreateSubroutineType(context.debugInfo.builder, allocArrayOf(
-                this@subroutineType.types.map { it.diType(context, llvmTargetData) }),
-                this@subroutineType.types.size)!!
+                types.map { it.diType(context, llvmTargetData) }),
+                types.size)!!
     }
 }
 

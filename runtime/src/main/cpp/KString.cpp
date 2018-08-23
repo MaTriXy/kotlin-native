@@ -13,18 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-#include <limits.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <stdio.h>
 #include <string.h>
-#include <unistd.h>
 
-#include <iterator>
-#include <string>
-
-#include "Assert.h"
+#include "KAssert.h"
 #include "City.h"
 #include "Exceptions.h"
 #include "Memory.h"
@@ -671,17 +662,17 @@ int iswalnum_Konan(KChar ch) {
 }
 
 int iswspace_Konan(KChar ch) {
-  // Optimized case for ASCII.
+  // FILE, GROUP, RECORD, UNIT separators, # Zs SPACE or # Cc CONTROLs
   if ((ch >= 0x1c && ch <= 0x20) || (ch >= 0x9 && ch <= 0xd)) {
     return true;
   }
-  if (ch == 0x1680) {
-    return true;
-  }
-  if (ch < 0x2000 || ch == 0x2007) {
+  // not (# Zs OGHAM SPACE MARK or # Cc or # Zs NO-BREAK SPACE)
+  if (ch < 0x2000 && !(ch == 0x1680 || ch == 0x85 || ch == 0xA0)) {
     return false;
   }
-  return ch <= 0x200b || ch == 0x2028 || ch == 0x2029 || ch == 0x3000;
+  // if # Zl LINE SEPARATOR or # Zp PARAGRAPH SEPARATOR or # Zs NARROW NO-BREAK SPACE
+  // or # Zs MEDIUM MATHEMATICAL SPACE or # Zs IDEOGRAPHIC SPACE
+  return ch < 0x200b || ch == 0x2028 || ch == 0x2029 || ch == 0x202F || ch == 0x205F || ch == 0x3000;
 }
 
 int iswupper_Konan(KChar ch) {
@@ -708,25 +699,12 @@ int iswlower_Konan(KChar ch) {
   return getType(ch) == LOWERCASE_LETTER;
 }
 
-void checkParsingErrors(const char* c_str, const char* end, KStdString::size_type c_str_size) {
-  if (end == c_str) {
-    ThrowNumberFormatException();
-  }
-  // According to http://docs.oracle.com/javase/8/docs/api/java/lang/Double.html#valueOf-java.lang.String-
-  // trailing whitespace characters must be ignored so we need to do an additional check.
-  for (const char* p = end; p < c_str + c_str_size; p++) {
-    if (!iswspace_Konan(*p)) {
-      ThrowNumberFormatException();
-    }
-  }
-}
-
 } // namespace
 
 extern "C" {
 
 OBJ_GETTER(CreateStringFromCString, const char* cstring) {
-  RETURN_RESULT_OF(utf8ToUtf16, cstring, strlen(cstring));
+  RETURN_RESULT_OF(utf8ToUtf16, cstring, cstring ? strlen(cstring) : 0);
 }
 
 OBJ_GETTER(CreateStringFromUtf8, const char* utf8, uint32_t lengthBytes) {
@@ -759,6 +737,29 @@ KInt Kotlin_String_compareTo(KString thiz, KString other) {
   return diff < 0 ? -1 : 1;
 }
 
+KInt Kotlin_String_compareToIgnoreCase(KString thiz, KConstRef other) {
+  RuntimeAssert(thiz->type_info() == theStringTypeInfo &&
+                other->type_info() == theStringTypeInfo, "Must be strings");
+  // Important, due to literal internalization.
+  KString otherString = other->array();
+  if (thiz == otherString) return 0;
+  auto count = thiz->count_ < otherString->count_ ? thiz->count_ : otherString->count_;
+  const KChar* thizRaw = CharArrayAddressOfElementAt(thiz, 0);
+  const KChar* otherRaw = CharArrayAddressOfElementAt(otherString, 0);
+  for (KInt index = 0; index < count; ++index) {
+    int diff = towlower_Konan(*thizRaw++) - towlower_Konan(*otherRaw++);
+    if (diff != 0)
+      return diff < 0 ? -1 : 1;
+  }
+  if (otherString->count_ == thiz->count_)
+    return 0;
+  else if (otherString->count_ > thiz->count_)
+    return -1;
+  else
+    return 1;
+}
+
+
 KChar Kotlin_String_get(KString thiz, KInt index) {
   if (static_cast<uint32_t>(index) >= thiz->count_) {
     ThrowArrayIndexOutOfBoundsException();
@@ -780,19 +781,27 @@ const char* byteArrayAsCString(KConstRef thiz, KInt start, KInt size) {
 }
 
 OBJ_GETTER(Kotlin_ByteArray_stringFromUtf8OrThrow, KConstRef thiz, KInt start, KInt size) {
-  const char* rawString = byteArrayAsCString(thiz, start, size);
   if (size == 0) {
     RETURN_RESULT_OF0(TheEmptyString);
   }
-  RETURN_RESULT_OF(utf8ToUtf16OrThrow, rawString, size);
+  const char* rawString = byteArrayAsCString(thiz, start, size);
+  KInt realSize = 0;
+  while (rawString[realSize] != 0 && realSize < size) {
+     realSize++;
+  }
+  RETURN_RESULT_OF(utf8ToUtf16OrThrow, rawString, realSize);
 }
 
 OBJ_GETTER(Kotlin_ByteArray_stringFromUtf8, KConstRef thiz, KInt start, KInt size) {
-  const char* rawString = byteArrayAsCString(thiz, start, size);
   if (size == 0) {
     RETURN_RESULT_OF0(TheEmptyString);
   }
-  RETURN_RESULT_OF(utf8ToUtf16, rawString, size);
+  const char* rawString = byteArrayAsCString(thiz, start, size);
+  KInt realSize = 0;
+  while (rawString[realSize] != 0 && realSize < size) {
+     realSize++;
+  }
+  RETURN_RESULT_OF(utf8ToUtf16, rawString, realSize);
 }
 
 OBJ_GETTER(Kotlin_String_toUtf8, KString thiz, KInt start, KInt size) {
@@ -852,6 +861,30 @@ OBJ_GETTER(Kotlin_String_plusImpl, KString thiz, KString other) {
       other->count_ * sizeof(KChar));
   RETURN_OBJ(result->obj());
 }
+
+KInt Kotlin_StringBuilder_insertString(KRef builder, KInt position, KString fromString) {
+  auto toArray = builder->array();
+  RuntimeAssert(toArray->count_ >= fromString->count_ + position, "must be true");
+  memcpy(CharArrayAddressOfElementAt(toArray, position),
+         CharArrayAddressOfElementAt(fromString, 0),
+         fromString->count_ * sizeof(KChar));
+  return fromString->count_;
+}
+
+KInt Kotlin_StringBuilder_insertInt(KRef builder, KInt position, KInt value) {
+  auto toArray = builder->array();
+  RuntimeAssert(toArray->count_ >= 11 + position, "must be true");
+  char cstring[12];
+  auto length = konan::snprintf(cstring, sizeof(cstring), "%d", value);
+  auto* from = &cstring[0];
+  auto* to = CharArrayAddressOfElementAt(toArray, position);
+  auto* end = from + length;
+  while (from != end) {
+    *to++ = *from++;
+  }
+  return length;
+}
+
 
 KBoolean Kotlin_String_equals(KString thiz, KConstRef other) {
   if (other == nullptr || other->type_info() != theStringTypeInfo) return false;
@@ -1045,7 +1078,10 @@ KInt Kotlin_Char_digitOfChecked(KChar ch, KInt radix) {
 }
 
 KInt Kotlin_String_indexOfChar(KString thiz, KChar ch, KInt fromIndex) {
-  if (fromIndex < 0 || fromIndex > thiz->count_) {
+  if (fromIndex < 0) {
+    fromIndex = 0;
+  }
+  if (fromIndex > thiz->count_) {
     return -1;
   }
   KInt count = thiz->count_;
@@ -1076,8 +1112,13 @@ KInt Kotlin_String_lastIndexOfChar(KString thiz, KChar ch, KInt fromIndex) {
 
 // TODO: or code up Knuth-Moris-Pratt.
 KInt Kotlin_String_indexOfString(KString thiz, KString other, KInt fromIndex) {
-  if (fromIndex < 0 || fromIndex > thiz->count_ ||
-      other->count_ > thiz->count_ - fromIndex) {
+  if (fromIndex < 0) {
+    fromIndex = 0;
+  }
+  if (fromIndex >= thiz->count_) {
+    return (other->count_ == 0) ? thiz->count_ : -1;
+  }
+  if (other->count_ > thiz->count_ - fromIndex) {
     return -1;
   }
   // An empty string can be always found.

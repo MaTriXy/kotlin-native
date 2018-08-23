@@ -16,13 +16,19 @@
 
 package org.jetbrains.kotlin.konan.target
 
-enum class Family(name:String, val exeSuffix:String, val dynamicPrefix: String, val dynamicSuffix: String) {
-    OSX(    "osx"    , "kexe", "lib", "dylib"),
-    IOS(    "ios"    , "kexe", "lib", "dylib"),
-    LINUX(  "linux"  , "kexe", "lib", "so"   ),
-    WINDOWS("windows", "exe" , ""   , "dll"  ),
-    ANDROID("android", "so"  , "lib", "so"   ),
-    WASM(   "wasm"   , "wasm", ""   , "wasm" )
+import org.jetbrains.kotlin.konan.target.KonanTarget.*
+import org.jetbrains.kotlin.konan.util.Named
+import java.io.Serializable
+
+enum class Family(val exeSuffix:String, val dynamicPrefix: String, val dynamicSuffix: String,
+                  val staticPrefix: String, val staticSuffix: String) {
+    OSX     ("kexe", "lib", "dylib", "lib", "a"),
+    IOS     ("kexe", "lib", "dylib", "lib", "a"),
+    LINUX   ("kexe", "lib", "so"   , "lib", "a"),
+    MINGW   ("exe" , ""   , "dll"  , "lib", "a"),
+    ANDROID ("so"  , "lib", "so"   , "lib", "a"),
+    WASM    ("wasm", ""   , "wasm" , "",    "wasm"),
+    ZEPHYR  ("o"   , "lib", "a"    , "lib", "a")
 }
 
 enum class Architecture(val bitness: Int) {
@@ -32,29 +38,30 @@ enum class Architecture(val bitness: Int) {
     MIPS32(32),
     MIPSEL32(32),
     WASM32(32);
-
-    val userName: String
-        get() = this.name.toLowerCase()
 }
 
-enum class KonanTarget(val family: Family, val architecture: Architecture, val detailedName: String, var enabled: Boolean = false) {
-    ANDROID_ARM32(  Family.ANDROID,     Architecture.ARM32,     "android_arm32"),
-    ANDROID_ARM64(  Family.ANDROID,     Architecture.ARM64,     "android_arm64"),
-    IPHONE(         Family.IOS,         Architecture.ARM64,     "ios"),
-    IPHONE_SIM(     Family.IOS,         Architecture.X64,       "ios_sim"),
-    LINUX(          Family.LINUX,       Architecture.X64,       "linux"),
-    MINGW(          Family.WINDOWS,     Architecture.X64,       "mingw"),
-    MACBOOK(        Family.OSX,         Architecture.X64,       "osx"),
-    RASPBERRYPI(    Family.LINUX,       Architecture.ARM32,     "raspberrypi"),
-    LINUX_MIPS32(   Family.LINUX,       Architecture.MIPS32,    "linux_mips32"),
-    LINUX_MIPSEL32( Family.LINUX,       Architecture.MIPSEL32,  "linux_mipsel32"),
-    WASM32(         Family.WASM,        Architecture.WASM32,    "wasm32");
+sealed class KonanTarget(override val name: String, val family: Family, val architecture: Architecture) : Named {
+    object ANDROID_ARM32 :  KonanTarget( "android_arm32",   Family.ANDROID, Architecture.ARM32)
+    object ANDROID_ARM64 :  KonanTarget( "android_arm64",   Family.ANDROID, Architecture.ARM64)
+    object IOS_ARM32 :      KonanTarget( "ios_arm32",       Family.IOS,     Architecture.ARM32)
+    object IOS_ARM64 :      KonanTarget( "ios_arm64",       Family.IOS,     Architecture.ARM64)
+    object IOS_X64 :        KonanTarget( "ios_x64",         Family.IOS,     Architecture.X64)
+    object LINUX_X64 :      KonanTarget( "linux_x64",       Family.LINUX,   Architecture.X64)
+    object MINGW_X64 :      KonanTarget( "mingw_x64",       Family.MINGW,   Architecture.X64)
+    object MACOS_X64 :      KonanTarget( "macos_x64",       Family.OSX,     Architecture.X64)
+    object LINUX_ARM32_HFP :KonanTarget( "linux_arm32_hfp", Family.LINUX,   Architecture.ARM32)
+    object LINUX_MIPS32 :   KonanTarget( "linux_mips32",    Family.LINUX,   Architecture.MIPS32)
+    object LINUX_MIPSEL32 : KonanTarget( "linux_mipsel32",  Family.LINUX,   Architecture.MIPSEL32)
+    object WASM32 :         KonanTarget( "wasm32",          Family.WASM,    Architecture.WASM32)
 
-    val userName get() = name.toLowerCase()
+    // Tunable targets
+    class ZEPHYR(val subName: String, val genericName: String = "zephyr") : KonanTarget("${genericName}_$subName", Family.ZEPHYR, Architecture.ARM32)
+
+    override fun toString() = name
 }
 
 fun hostTargetSuffix(host: KonanTarget, target: KonanTarget) =
-    if (target == host) host.detailedName else "${host.detailedName}-${target.detailedName}"
+    if (target == host) host.name else "${host.name}-${target.name}"
 
 enum class CompilerOutputKind {
     PROGRAM {
@@ -63,6 +70,10 @@ enum class CompilerOutputKind {
     DYNAMIC {
         override fun suffix(target: KonanTarget?) = ".${target!!.family.dynamicSuffix}"
         override fun prefix(target: KonanTarget?) = "${target!!.family.dynamicPrefix}"
+    },
+    STATIC {
+        override fun suffix(target: KonanTarget?) = ".${target!!.family.staticSuffix}"
+        override fun prefix(target: KonanTarget?) = "${target!!.family.staticPrefix}"
     },
     FRAMEWORK {
         override fun suffix(target: KonanTarget?): String = ".framework"
@@ -78,12 +89,69 @@ enum class CompilerOutputKind {
     open fun prefix(target: KonanTarget? = null): String = ""
 }
 
-class TargetManager(val userRequest: String? = null) {
-    val targets = KonanTarget.values().associate{ it.userName to it }
-    val target = determineCurrent()
-    val targetName
-        get() = target.name.toLowerCase()
+interface TargetManager {
+    val target: KonanTarget
+    val targetName : String
+    fun list() : Unit
+    val hostTargetSuffix: String
+    val targetSuffix: String
+}
 
+private class TargetManagerImpl(val userRequest: String?, val hostManager: HostManager): TargetManager {
+    override val target = determineCurrent()
+    override val targetName
+        get() = target.visibleName
+
+    override fun list() {
+        hostManager.enabled.forEach {
+            val isDefault = if (it == target) "(default)" else ""
+            val aliasList = HostManager.listAliases(it.visibleName).joinToString(", ")
+            println(String.format("%1$-30s%2$-10s%3\$s", "${it.visibleName}:", "$isDefault", aliasList))
+        }
+    }
+
+    fun determineCurrent(): KonanTarget {
+        return if (userRequest == null || userRequest == "host") {
+            HostManager.host
+        } else {
+            val resolvedAlias = HostManager.resolveAlias(userRequest)
+            hostManager.targets[hostManager.known(resolvedAlias)]!!
+        }
+    }
+
+    override val hostTargetSuffix get() = hostTargetSuffix(HostManager.host, target)
+    override val targetSuffix get() = target.name
+}
+
+open class HostManager(protected val distribution: Distribution = Distribution()) {
+
+    fun targetManager(userRequest: String? = null): TargetManager = TargetManagerImpl(userRequest, this)
+
+    // TODO: need a better way to enumerated predefined targets.
+    private val predefinedTargets = listOf(
+            ANDROID_ARM32, ANDROID_ARM64,
+            IOS_ARM32, IOS_ARM64, IOS_X64,
+            LINUX_X64, LINUX_ARM32_HFP, LINUX_MIPS32, LINUX_MIPSEL32,
+            MINGW_X64,
+            MACOS_X64,
+            WASM32)
+
+    private val zephyrSubtargets = distribution.availableSubTarget("zephyr").map { ZEPHYR(it) }
+
+    private val configurableSubtargets = zephyrSubtargets
+
+    val targetValues: List<KonanTarget> by lazy {
+        predefinedTargets + configurableSubtargets
+    }
+
+    val targets = targetValues.associate{ it.visibleName to it }
+
+    fun toKonanTargets(names: Iterable<String>): List<KonanTarget> {
+        return names.map {
+            if (it == "host") HostManager.host
+            else targets[known(resolveAlias(it))]!!
+        }
+    }
 
     fun known(name: String): String {
         if (targets[name] == null) {
@@ -92,28 +160,45 @@ class TargetManager(val userRequest: String? = null) {
         return name
     }
 
-    fun list() {
-        targets.forEach { key, it -> 
-            if (it.enabled) {
-                val isDefault = if (it == target) "(default)" else ""
-                println(String.format("%1$-30s%2$-10s", "$key:", "$isDefault"))
-            }
-        }
+    fun targetByName(name: String): KonanTarget {
+        if (name == "host") return host
+        val target = targets[resolveAlias(name)]
+        if (target == null) throw TargetSupportException("Unknown target name: $name")
+        return target
     }
 
-    fun determineCurrent(): KonanTarget {
-        return if (userRequest == null || userRequest == "host") {
-            host
-        } else {
-            targets[known(userRequest)]!!
-        }
+    val enabled: List<KonanTarget> by lazy { 
+            when (host) {
+                KonanTarget.LINUX_X64 -> listOf(
+                    KonanTarget.LINUX_X64,
+                    KonanTarget.LINUX_ARM32_HFP,
+                    KonanTarget.LINUX_MIPS32,
+                    KonanTarget.LINUX_MIPSEL32,
+                    KonanTarget.ANDROID_ARM32,
+                    KonanTarget.ANDROID_ARM64,
+                    KonanTarget.WASM32
+                ) + zephyrSubtargets
+                KonanTarget.MINGW_X64 -> listOf(
+                    KonanTarget.MINGW_X64,
+                    KonanTarget.WASM32
+                ) + zephyrSubtargets
+                KonanTarget.MACOS_X64 -> listOf(
+                    KonanTarget.MACOS_X64,
+                    KonanTarget.IOS_ARM32,
+                    KonanTarget.IOS_ARM64,
+                    KonanTarget.IOS_X64,
+                    KonanTarget.ANDROID_ARM32,
+                    KonanTarget.ANDROID_ARM64,
+                    KonanTarget.WASM32
+                ) + zephyrSubtargets
+                else ->
+                    throw TargetSupportException("Unknown host platform: $host")
+            }        
     }
 
-    val hostTargetSuffix get() = hostTargetSuffix(host, target)
-    val targetSuffix get() = target.detailedName
+    fun isEnabled(target: KonanTarget) = enabled.contains(target)
 
     companion object {
-
         fun host_os(): String {
             val javaOsName = System.getProperty("os.name")
             return when {
@@ -130,19 +215,11 @@ class TargetManager(val userRequest: String? = null) {
             return if (hostOs == "osx") "macos" else hostOs
         }
 
-        @JvmStatic
-        fun longerSystemName(): String = when (host) {
-            KonanTarget.MACBOOK ->  "darwin-macos"
-            KonanTarget.LINUX ->  "linux-x86-64"
-            KonanTarget.MINGW -> "windows-x86-64"
-            else -> throw TargetSupportException("Unknown host: $host")
-        }
-
         val jniHostPlatformIncludeDir: String 
             get() = when(host) {
-                KonanTarget.MACBOOK -> "darwin"
-                KonanTarget.LINUX -> "linux"
-                KonanTarget.MINGW ->"win32"
+                KonanTarget.MACOS_X64 -> "darwin"
+                KonanTarget.LINUX_X64 -> "linux"
+                KonanTarget.MINGW_X64 ->"win32"
                 else -> throw TargetSupportException("Unknown host: $host.")
             }
 
@@ -157,47 +234,47 @@ class TargetManager(val userRequest: String? = null) {
         }
 
         val host: KonanTarget = when (host_os()) {
-            "osx"   -> KonanTarget.MACBOOK
-            "linux" -> KonanTarget.LINUX
-            "windows" -> KonanTarget.MINGW
+            "osx"   -> KonanTarget.MACOS_X64
+            "linux" -> KonanTarget.LINUX_X64
+            "windows" -> KonanTarget.MINGW_X64
             else -> throw TargetSupportException("Unknown host target: ${host_os()} ${host_arch()}")
         }
 
-        val hostSuffix get() = host.detailedName
-        @JvmStatic
-        val hostName get() = host.name.toLowerCase()
+        val hostIsMac   = (host == KonanTarget.MACOS_X64)
+        val hostIsLinux = (host == KonanTarget.LINUX_X64)
+        val hostIsMingw = (host == KonanTarget.MINGW_X64)
 
-        init {
-            when (host) {
-                KonanTarget.LINUX   -> {
-                    KonanTarget.LINUX.enabled = true
-                    KonanTarget.RASPBERRYPI.enabled = true
-                    KonanTarget.LINUX_MIPS32.enabled = true
-                    KonanTarget.LINUX_MIPSEL32.enabled = true
-                    KonanTarget.ANDROID_ARM32.enabled = true
-                    KonanTarget.ANDROID_ARM64.enabled = true
-                    KonanTarget.WASM32.enabled = true
-                }
-                KonanTarget.MINGW -> {
-                    KonanTarget.MINGW.enabled = true
-                    KonanTarget.WASM32.enabled = true
-                }
-                KonanTarget.MACBOOK -> {
-                    KonanTarget.MACBOOK.enabled = true
-                    KonanTarget.IPHONE.enabled = true
-                    //KonanTarget.IPHONE_SIM.enabled = true
-                    KonanTarget.ANDROID_ARM32.enabled = true
-                    KonanTarget.ANDROID_ARM64.enabled = true
-                    KonanTarget.WASM32.enabled = true
-                }
-                else ->
-                    throw TargetSupportException("Unknown host platform: $host")
+        val hostSuffix get() = host.name
+        @JvmStatic
+        val hostName get() = host.name
+
+        val knownTargetTemplates = listOf("zephyr")
+
+        private val targetAliasResolutions = mapOf(
+                "linux"       to "linux_x64",
+                "macbook"     to "macos_x64",
+                "macos"       to "macos_x64",
+                "imac"        to "macos_x64",
+                "raspberrypi" to "linux_arm32_hfp",
+                "iphone32"    to "ios_arm32",
+                "iphone"      to "ios_arm64",
+                "ipad"        to "ios_arm64",
+                "ios"         to "ios_arm64",
+                "iphone_sim"  to "ios_x64",
+                "mingw"       to "mingw_x64"
+        )
+
+        private val targetAliases: Map<String, List<String>> by lazy {
+            val result = mutableMapOf<String, MutableList<String>>()
+            targetAliasResolutions.entries.forEach {
+                result.getOrPut(it.value, { mutableListOf() } ).add(it.key)
             }
+            result
         }
 
-        @JvmStatic
-        val enabled: List<KonanTarget> 
-            get() = KonanTarget.values().asList().filter { it.enabled }
+        fun resolveAlias(request: String): String = targetAliasResolutions[request] ?: request
+
+        fun listAliases(target: String): List<String> = targetAliases[target] ?: emptyList()
     }
 }
 

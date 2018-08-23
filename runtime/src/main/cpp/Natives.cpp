@@ -20,7 +20,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "Assert.h"
+#include "KAssert.h"
 #include "Exceptions.h"
 #include "Memory.h"
 #include "Natives.h"
@@ -44,7 +44,7 @@ OBJ_GETTER0(Kotlin_getCurrentStackTrace) {
 }
 
 // TODO: consider handling it with compiler magic instead.
-OBJ_GETTER0(Kotlin_konan_internal_undefined) {
+OBJ_GETTER0(Kotlin_native_internal_undefined) {
   RETURN_OBJ(nullptr);
 }
 

@@ -1,9 +1,0 @@
-depends = CFNetwork CoreFoundation CoreGraphics CoreImage CoreText CoreVideo EAGL Foundation Metal OpenGLESCommon QuartzCore Security UIKit darwin posix
-language = Objective-C
-package = platform.HomeKit
-headers = HomeKit/HomeKit.h
-
-headerFilter = HomeKit/**
-
-compilerOpts = -framework HomeKit
-linkerOpts = -framework HomeKit

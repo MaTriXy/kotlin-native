@@ -1,14 +1,19 @@
 subprojects {
     buildscript {
         repositories {
-            mavenCentral()
+            maven {
+                url 'https://cache-redirector.jetbrains.com/maven-central'
+            }
             maven {
                 url "https://dl.bintray.com/jetbrains/kotlin-native-dependencies"
             }
+	    maven {
+	        url "https://teamcity.jetbrains.com/guestAuth/app/rest/builds/buildType:(id:Kotlin_13M1_Compiler),number:1.3-M1-eap-77,branch:default:any/artifacts/content/maven/"
+	    }
         }
 
         dependencies {
-            classpath "org.jetbrains.kotlin:kotlin-native-gradle-plugin:+"
+            classpath "org.jetbrains.kotlin:kotlin-native-gradle-plugin:${project.property('konan.plugin.version')}"
         }
     }
 }
@@ -18,14 +23,20 @@ task buildSh(type: Exec) {
     workingDir projectDir.canonicalPath
 }
 
-task buildSamplesWithPlatfromLibs() {
+task buildSamplesWithPlatformLibs() {
     dependsOn ':csvparser:build'
     dependsOn ':nonBlockingEchoServer:build'
     dependsOn ':objc:build'
     dependsOn ':opengl:build'
     dependsOn ':socket:build'
-    dependsOn ':tensorflow:build'
     dependsOn ':uikit:build'
     dependsOn ':win32:build'
     dependsOn ':workers:build'
+    dependsOn ':globalState:build'
+}
+
+task buildAllSamples() {
+    subprojects.each {
+        dependsOn("${it.path}:build")
+    }
 }

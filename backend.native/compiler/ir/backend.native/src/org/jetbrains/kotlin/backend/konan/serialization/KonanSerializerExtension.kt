@@ -18,11 +18,16 @@ package org.jetbrains.kotlin.backend.konan.serialization
 
 import org.jetbrains.kotlin.backend.konan.Context
 import org.jetbrains.kotlin.descriptors.*
-import org.jetbrains.kotlin.protobuf.ExtensionRegistryLite
-import org.jetbrains.kotlin.serialization.*
+import org.jetbrains.kotlin.metadata.deserialization.BinaryVersion
+import org.jetbrains.kotlin.metadata.ProtoBuf
+import org.jetbrains.kotlin.metadata.konan.KonanProtoBuf
+import org.jetbrains.kotlin.metadata.serialization.MutableVersionRequirementTable
+import org.jetbrains.kotlin.serialization.KonanDescriptorSerializer
+import org.jetbrains.kotlin.serialization.KotlinSerializerExtensionBase
+import org.jetbrains.kotlin.serialization.konan.KonanSerializerProtocol
 import org.jetbrains.kotlin.types.KotlinType
 
-internal class KonanSerializerExtension(val context: Context) :
+internal class KonanSerializerExtension(val context: Context, override val metadataVersion: BinaryVersion) :
         KotlinSerializerExtensionBase(KonanSerializerProtocol), IrAwareExtension {
 
     val inlineDescriptorTable = DescriptorTable(context.irBuiltIns)
@@ -33,7 +38,7 @@ internal class KonanSerializerExtension(val context: Context) :
         // TODO: For debugging purpose we store the textual 
         // representation of serialized types.
         // To be removed for release 1.0.
-        proto.setExtension(KonanLinkData.typeText, type.toString())
+        proto.setExtension(KonanProtoBuf.typeText, type.toString())
 
         super.serializeType(type, proto)
     }
@@ -47,7 +52,9 @@ internal class KonanSerializerExtension(val context: Context) :
     }
 
     override fun serializeEnumEntry(descriptor: ClassDescriptor, proto: ProtoBuf.EnumEntry.Builder) {
-
+        // Serialization doesn't preserve enum entry order, so we need to serialize ordinal.
+        val ordinal = context.specialDeclarationsFactory.getEnumEntryOrdinal(descriptor)
+        proto.setExtension(KonanProtoBuf.enumEntryOrdinal, ordinal)
         super.serializeEnumEntry(descriptor, proto)
     }
 
@@ -56,9 +63,9 @@ internal class KonanSerializerExtension(val context: Context) :
         super.serializeConstructor(descriptor, proto)
     }
 
-    override fun serializeClass(descriptor: ClassDescriptor, proto: ProtoBuf.Class.Builder) {
+    override fun serializeClass(descriptor: ClassDescriptor, proto: ProtoBuf.Class.Builder, versionRequirementTable: MutableVersionRequirementTable) {
 
-        super.serializeClass(descriptor, proto)
+        super.serializeClass(descriptor, proto, versionRequirementTable)
     }
 
     override fun serializeFunction(descriptor: FunctionDescriptor, proto: ProtoBuf.Function.Builder) {
@@ -66,16 +73,16 @@ internal class KonanSerializerExtension(val context: Context) :
         super.serializeFunction(descriptor, proto)
     }
 
-    override fun serializeProperty(descriptor: PropertyDescriptor, proto: ProtoBuf.Property.Builder) {
+    override fun serializeProperty(descriptor: PropertyDescriptor, proto: ProtoBuf.Property.Builder, versionRequirementTable: MutableVersionRequirementTable) {
         val variable = originalVariables[descriptor]
         if (variable != null) {
-            proto.setExtension(KonanLinkData.usedAsVariable, true)
+            proto.setExtension(KonanProtoBuf.usedAsVariable, true)
         }
 
-        proto.setExtension(KonanLinkData.hasBackingField, 
+        proto.setExtension(KonanProtoBuf.hasBackingField,
             context.ir.propertiesWithBackingFields.contains(descriptor))
 
-        super.serializeProperty(descriptor, proto)
+        super.serializeProperty(descriptor, proto, versionRequirementTable)
     }
 
     override fun addFunctionIR(proto: ProtoBuf.Function.Builder, serializedIR: String) 
@@ -96,22 +103,6 @@ internal class KonanSerializerExtension(val context: Context) :
             context, inlineDescriptorTable, stringTable, serializer, descriptor).serializeInlineBody()
     }
 }
-
-object KonanSerializerProtocol : SerializerExtensionProtocol(
-        ExtensionRegistryLite.newInstance().apply {
-           KonanLinkData.registerAllExtensions(this)
-        },
-        KonanLinkData.packageFqName,
-        KonanLinkData.constructorAnnotation,
-        KonanLinkData.classAnnotation,
-        KonanLinkData.functionAnnotation,
-        KonanLinkData.propertyAnnotation,
-        KonanLinkData.enumEntryAnnotation,
-        KonanLinkData.compileTimeValue,
-        KonanLinkData.parameterAnnotation,
-        KonanLinkData.typeAnnotation,
-        KonanLinkData.typeParameterAnnotation
-)
 
 internal interface IrAwareExtension {
 

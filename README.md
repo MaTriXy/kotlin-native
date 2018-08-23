@@ -11,7 +11,9 @@ or where a developer is willing to produce a reasonably-sized self-contained pro
 without the need to ship an additional execution runtime.
 
 Prerequisites:
-	install JDK for your platform, instead of JRE. The build requires ```tools.jar```, which is not included in JRE.
+*   install JDK for your platform, instead of JRE. The build requires ```tools.jar```, which is not included in JRE;
+*   on macOS install Xcode 9.4.1
+*   on Fedora 26+ ```yum install ncurses-compat-libs``` may be needed
 
 To compile from sources use following steps:
 
@@ -27,6 +29,11 @@ The build can take about an hour on a Macbook Pro.
 To run a shorter build with only the host compiler and libraries, run:
 
     ./gradlew dist distPlatformLibs
+
+To include Kotlin compiler in [composite build](https://docs.gradle.org/current/userguide/composite_builds.html) and build
+against it, use the `kotlinProjectPath` project property:
+
+    ./gradlew dist -PkotlinProjectPath=path/to/kotlin/project
 
 After that, you should be able to compile your programs like this:
 

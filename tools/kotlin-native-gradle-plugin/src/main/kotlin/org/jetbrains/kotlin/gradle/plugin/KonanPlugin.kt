@@ -17,16 +17,29 @@
 package org.jetbrains.kotlin.gradle.plugin
 
 import org.gradle.api.*
+import org.gradle.api.component.ComponentWithVariants
+import org.gradle.api.component.SoftwareComponent
 import org.gradle.api.file.FileCollection
+import org.gradle.api.internal.FeaturePreviews
+import org.gradle.api.internal.component.SoftwareComponentInternal
+import org.gradle.api.internal.component.UsageContext
 import org.gradle.api.internal.project.ProjectInternal
 import org.gradle.api.plugins.BasePlugin
+import org.gradle.api.publish.PublishingExtension
+import org.gradle.api.publish.maven.MavenPublication
+import org.gradle.api.publish.maven.internal.publication.MavenPublicationInternal
+import org.gradle.language.cpp.internal.NativeVariantIdentity
 import org.gradle.tooling.provider.model.ToolingModelBuilderRegistry
+import org.gradle.util.GradleVersion
 import org.jetbrains.kotlin.gradle.plugin.KonanPlugin.Companion.COMPILE_ALL_TASK_NAME
+import org.jetbrains.kotlin.gradle.plugin.model.KonanToolingModelBuilder
 import org.jetbrains.kotlin.gradle.plugin.tasks.*
+import org.jetbrains.kotlin.konan.KonanVersion
+import org.jetbrains.kotlin.konan.target.HostManager
 import org.jetbrains.kotlin.konan.target.KonanTarget
-import org.jetbrains.kotlin.konan.target.TargetManager
+import org.jetbrains.kotlin.konan.target.customerDistribution
+import org.jetbrains.kotlin.konan.util.DependencyProcessor
 import java.io.File
-import java.util.*
 import javax.inject.Inject
 
 /**
@@ -62,19 +75,29 @@ internal val Project.konanBinBaseDir         get() = konanBuildRoot.resolve("bin
 internal val Project.konanLibsBaseDir        get() = konanBuildRoot.resolve("libs")
 internal val Project.konanBitcodeBaseDir     get() = konanBuildRoot.resolve("bitcode")
 
-internal fun File.targetSubdir(target: KonanTarget) = resolve(target.userName)
+internal fun File.targetSubdir(target: KonanTarget) = resolve(target.visibleName)
 
 internal val Project.konanDefaultSrcFiles         get() = fileTree("${projectDir.canonicalPath}/src/main/kotlin")
 internal fun Project.konanDefaultDefFile(libName: String)
         = file("${projectDir.canonicalPath}/src/main/c_interop/$libName.def")
 
 @Suppress("UNCHECKED_CAST")
-internal val Project.konanArtifactsContainer: NamedDomainObjectContainer<KonanBuildingConfig<*>>
-    get() = extensions.getByName(KonanPlugin.ARTIFACTS_CONTAINER_NAME)
-            as NamedDomainObjectContainer<KonanBuildingConfig<*>>
+internal val Project.konanArtifactsContainer: KonanArtifactContainer
+    get() = extensions.getByName(KonanPlugin.ARTIFACTS_CONTAINER_NAME) as KonanArtifactContainer
+
+// TODO: The Kotlin/Native compiler is downloaded manually by a special task so the compilation tasks
+// are configured without the compile distribution. After target management refactoring
+// we need .properties files from the distribution to configure targets. This is worked around here
+// by using HostManager instead of PlatformManager. But we need to download the compiler at the configuration
+// stage (e.g. by getting it from maven as a plugin dependency) and bring back the PlatformManager here.
+internal val Project.hostManager: HostManager
+    get() = findProperty("hostManager") as HostManager? ?:
+        HostManager(customerDistribution(konanHome))
 
 internal val Project.konanTargets: List<KonanTarget>
-    get() = konanExtension.konanTargets
+    get() = hostManager.toKonanTargets(konanExtension.targets)
+                .filter{ hostManager.isEnabled(it) }
+                .distinct()
 
 @Suppress("UNCHECKED_CAST")
 internal val Project.konanExtension: KonanExtension
@@ -82,9 +105,6 @@ internal val Project.konanExtension: KonanExtension
 
 internal val Project.konanCompilerDownloadTask
     get() = tasks.getByName(KonanPlugin.KONAN_DOWNLOAD_TASK_NAME)
-
-internal val Project.konanVersion
-    get() = getProperty(KonanPlugin.ProjectProperty.KONAN_VERSION, KonanPlugin.DEFAULT_KONAN_VERSION) as String
 
 internal val Project.requestedTargets
     get() = findProperty(KonanPlugin.ProjectProperty.KONAN_BUILD_TARGETS)?.let {
@@ -99,7 +119,7 @@ internal val Project.compileAllTask
 
 internal fun Project.targetIsRequested(target: KonanTarget): Boolean {
     val targets = requestedTargets
-    return (targets.isEmpty() || targets.contains(target.userName) || targets.contains("all"))
+    return (targets.isEmpty() || targets.contains(target.visibleName) || targets.contains("all"))
 }
 
 /** Looks for task with given name in the given project. Throws [UnknownTaskException] if there's not such task. */
@@ -114,10 +134,10 @@ private fun Project.getOrCreateTask(name: String): Task = with(tasks) {
 }
 
 internal fun Project.konanCompilerName(): String =
-        "kotlin-native-${project.simpleOsName}-${this.konanVersion}"
+        "kotlin-native-${project.simpleOsName}-${KonanVersion.CURRENT}"
 
 internal fun Project.konanCompilerDownloadDir(): String =
-        KonanCompilerDownloadTask.KONAN_PARENT_DIR + "/" + project.konanCompilerName()
+        DependencyProcessor.localKonanDir.resolve(project.konanCompilerName()).absolutePath
 
 // region Useful extensions and functions ---------------------------------------
 
@@ -170,50 +190,50 @@ internal fun dumpProperties(task: Task) {
     when (task) {
         is KonanCompileTask -> with(task) {
             println()
-            println("Compilation task: ${name}")
-            println("destinationDir     : ${destinationDir}")
+            println("Compilation task: $name")
+            println("destinationDir     : $destinationDir")
             println("artifact           : ${artifact.canonicalPath}")
             println("srcFiles         : ${srcFiles.dump()}")
-            println("produce            : ${produce}")
+            println("produce            : $produce")
             println("libraries          : ${libraries.files.dump()}")
             println("                   : ${libraries.artifacts.map {
                 it.artifact.canonicalPath
             }.dump()}")
             println("                   : ${libraries.namedKlibs.dump()}")
             println("nativeLibraries    : ${nativeLibraries.dump()}")
-            println("linkerOpts         : ${linkerOpts}")
-            println("enableDebug        : ${enableDebug}")
-            println("noStdLib           : ${noStdLib}")
-            println("noMain             : ${noMain}")
-            println("enableOptimization : ${enableOptimizations}")
-            println("enableAssertions   : ${enableAssertions}")
-            println("noDefaultLibs      : ${noDefaultLibs}")
-            println("target             : ${target}")
-            println("languageVersion    : ${languageVersion}")
-            println("apiVersion         : ${apiVersion}")
-            println("konanVersion       : ${konanVersion}")
-            println("konanHome          : ${konanHome}")
+            println("linkerOpts         : $linkerOpts")
+            println("enableDebug        : $enableDebug")
+            println("noStdLib           : $noStdLib")
+            println("noMain             : $noMain")
+            println("enableOptimization : $enableOptimizations")
+            println("enableAssertions   : $enableAssertions")
+            println("noDefaultLibs      : $noDefaultLibs")
+            println("target             : $target")
+            println("languageVersion    : $languageVersion")
+            println("apiVersion         : $apiVersion")
+            println("konanVersion       : ${KonanVersion.CURRENT}")
+            println("konanHome          : $konanHome")
             println()
         }
         is KonanInteropTask -> with(task) {
             println()
-            println("Stub generation task: ${name}")
-            println("destinationDir     : ${destinationDir}")
-            println("artifact           : ${artifact}")
+            println("Stub generation task: $name")
+            println("destinationDir     : $destinationDir")
+            println("artifact           : $artifact")
             println("libraries          : ${libraries.files.dump()}")
             println("                   : ${libraries.artifacts.map {
                 it.artifact.canonicalPath
             }.dump()}")
             println("                   : ${libraries.namedKlibs.dump()}")
-            println("defFile            : ${defFile}")
-            println("target             : ${target}")
-            println("packageName        : ${packageName}")
-            println("compilerOpts       : ${compilerOpts}")
-            println("linkerOpts         : ${linkerOpts}")
+            println("defFile            : $defFile")
+            println("target             : $target")
+            println("packageName        : $packageName")
+            println("compilerOpts       : $compilerOpts")
+            println("linkerOpts         : $linkerOpts")
             println("headers            : ${headers.dump()}")
             println("linkFiles          : ${linkFiles.dump()}")
-            println("konanVersion       : ${konanVersion}")
-            println("konanHome          : ${konanHome}")
+            println("konanVersion       : ${KonanVersion.CURRENT}")
+            println("konanHome          : $konanHome")
             println()
         }
         else -> {
@@ -226,22 +246,37 @@ open class KonanExtension {
     var targets = mutableListOf("host")
     var languageVersion: String? = null
     var apiVersion: String? = null
+    var jvmArgs = mutableListOf<String>()
+}
 
-    val jvmArgs = mutableListOf<String>()
+open class KonanSoftwareComponent(val project: ProjectInternal?): SoftwareComponentInternal, ComponentWithVariants {
+    private val usages = mutableSetOf<UsageContext>()
+    override fun getUsages(): MutableSet<out UsageContext> = usages
 
-    internal val konanTargets: List<KonanTarget>
-        get() = targets.map { TargetManager(it).target }.distinct()
+    private val variants = mutableSetOf<SoftwareComponent>()
+    override fun getName() = "main"
+
+    override fun getVariants(): Set<SoftwareComponent> = variants
+
+    fun addVariant(component: SoftwareComponent) = variants.add(component)
 }
 
 class KonanPlugin @Inject constructor(private val registry: ToolingModelBuilderRegistry)
     : Plugin<ProjectInternal> {
 
     enum class ProjectProperty(val propertyName: String) {
-        KONAN_HOME          ("konan.home"),
-        KONAN_VERSION       ("konan.version"),
-        KONAN_BUILD_TARGETS ("konan.build.targets"),
-        KONAN_JVM_ARGS      ("konan.jvmArgs"),
-        DOWNLOAD_COMPILER   ("download.compiler")
+        KONAN_HOME                     ("konan.home"),
+        KONAN_BUILD_TARGETS            ("konan.build.targets"),
+        KONAN_JVM_ARGS                 ("konan.jvmArgs"),
+        KONAN_USE_ENVIRONMENT_VARIABLES("konan.useEnvironmentVariables"),
+        DOWNLOAD_COMPILER              ("download.compiler"),
+
+        // Properties used instead of env vars until https://github.com/gradle/gradle/issues/3468 is fixed.
+        // TODO: Remove them when an API for env vars is provided.
+        KONAN_CONFIGURATION_BUILD_DIR  ("konan.configuration.build.dir"),
+        KONAN_DEBUGGING_SYMBOLS        ("konan.debugging.symbols"),
+        KONAN_OPTIMIZATIONS_ENABLE     ("konan.optimizations.enable"),
+        KONAN_PUBLICATION_ENABLED      ("konan.publication.enabled")
     }
 
     companion object {
@@ -252,25 +287,39 @@ class KonanPlugin @Inject constructor(private val registry: ToolingModelBuilderR
 
         internal const val KONAN_EXTENSION_NAME = "konan"
 
-        internal val DEFAULT_KONAN_VERSION = Properties().apply {
-            load(KonanPlugin::class.java.getResourceAsStream("/META-INF/gradle-plugins/konan.properties") ?:
-                throw RuntimeException("Cannot find a properties file"))
-        }.getProperty("default-konan-version") ?: throw RuntimeException("Cannot read the default compiler version")
+        internal val REQUIRED_GRADLE_VERSION = GradleVersion.version("4.7")
     }
 
     private fun Project.cleanKonan() = project.tasks.withType(KonanBuildingTask::class.java).forEach {
         project.delete(it.artifact)
     }
 
+    private fun checkGradleVersion() =  GradleVersion.current().let { current ->
+        check(current >= REQUIRED_GRADLE_VERSION) {
+            "Kotlin/Native Gradle plugin is incompatible with this version of Gradle.\n" +
+            "The minimal required version is ${REQUIRED_GRADLE_VERSION}\n" +
+            "Current version is ${current}"
+        }
+    }
+
+
     override fun apply(project: ProjectInternal?) {
-        if (project == null) { return }
+        if (project == null) {
+            return
+        }
+        checkGradleVersion()
         registry.register(KonanToolingModelBuilder)
         project.plugins.apply("base")
         // Create necessary tasks and extensions.
         project.tasks.create(KONAN_DOWNLOAD_TASK_NAME, KonanCompilerDownloadTask::class.java)
         project.tasks.create(KONAN_GENERATE_CMAKE_TASK_NAME, KonanGenerateCMakeTask::class.java)
         project.extensions.create(KONAN_EXTENSION_NAME, KonanExtension::class.java)
-        project.extensions.create(KonanArtifactContainer::class.java, ARTIFACTS_CONTAINER_NAME, KonanArtifactContainer::class.java, project)
+        val container = project.extensions.create(KonanArtifactContainer::class.java, ARTIFACTS_CONTAINER_NAME, KonanArtifactContainer::class.java, project)
+        val isPublicationEnabled = project.gradle.services.get(FeaturePreviews::class.java).isFeatureEnabled(FeaturePreviews.Feature.GRADLE_METADATA)
+        project.setProperty(ProjectProperty.KONAN_PUBLICATION_ENABLED, isPublicationEnabled)
+        if (!isPublicationEnabled) {
+            project.logger.warn("feature GRADLE_METADATA is not enabled: publication is disabled")
+        }
 
         // Set additional project properties like konan.home, konan.build.targets etc.
         if (!project.hasProperty(ProjectProperty.KONAN_HOME)) {
@@ -290,18 +339,53 @@ class KonanPlugin @Inject constructor(private val registry: ToolingModelBuilderR
             doLast { project.cleanKonan() }
         }
 
-        // Create task to run supported executables.
-        project.getOrCreateTask("run").apply {
-            dependsOn(project.getTask("build"))
-            doLast {
-                for (task in project.tasks
-                        .withType(KonanCompileProgramTask::class.java)
-                        .matching { !it.isCrossCompile}) {
-                    project.exec {
-                        with(it) {
-                            commandLine(task.artifact.canonicalPath)
-                            if (project.extensions.extraProperties.has("runArgs")) {
-                                args(project.extensions.extraProperties.get("runArgs").toString().split(' '))
+        val runTask = project.getOrCreateTask("run")
+        project.afterEvaluate {
+            project.konanArtifactsContainer
+                    .filterIsInstance(KonanProgram::class.java)
+                    .forEach { program ->
+                        program.forEach { compile ->
+                            compile.runTask?.let { runTask.dependsOn(it) }
+                        }
+                    }
+        }
+
+        // Enable multiplatform support
+        project.pluginManager.apply(KotlinNativePlatformPlugin::class.java)
+        project.afterEvaluate {
+            if (!isPublicationEnabled)
+                return@afterEvaluate
+            project.pluginManager.withPlugin("maven-publish") {
+                container.all { buildingConfig ->
+                    val konanSoftwareComponent = buildingConfig.mainVariant
+                    project.extensions.configure(PublishingExtension::class.java) {
+                        val builtArtifact = buildingConfig.name
+                        val mavenPublication = it.publications.maybeCreate(builtArtifact, MavenPublication::class.java)
+                        mavenPublication.apply {
+                            artifactId = builtArtifact
+                            groupId = project.group.toString()
+                            from(konanSoftwareComponent)
+                        }
+                        (mavenPublication as MavenPublicationInternal).publishWithOriginalFileName()
+                        buildingConfig.pomActions.forEach {
+                            mavenPublication.pom(it)
+                        }
+                    }
+
+                    project.extensions.configure(PublishingExtension::class.java) {
+                        val publishing = it
+                        for (v in konanSoftwareComponent.variants) {
+                            publishing.publications.create(v.name, MavenPublication::class.java) { mavenPublication ->
+                                val coordinates = (v as NativeVariantIdentity).coordinates
+                                project.logger.info("variant with coordinates($coordinates) and module: ${coordinates.module}")
+                                mavenPublication.artifactId = coordinates.module.name
+                                mavenPublication.groupId = coordinates.group
+                                mavenPublication.version = coordinates.version
+                                mavenPublication.from(v)
+                                (mavenPublication as MavenPublicationInternal).publishWithOriginalFileName()
+                                buildingConfig.pomActions.forEach {
+                                    mavenPublication.pom(it)
+                                }
                             }
                         }
                     }

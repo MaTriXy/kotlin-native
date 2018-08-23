@@ -15,14 +15,17 @@
  */
 
 package kotlin
-import konan.internal.ExportForCompiler
-import konan.internal.InlineConstructor
 
-// TODO: remove that, as RTTI shall be per instantiation.
+import kotlin.native.internal.ExportForCompiler
+import kotlin.native.internal.ExportTypeInfo
+import kotlin.native.internal.InlineConstructor
+import kotlin.native.internal.PointsTo
+
 @ExportTypeInfo("theArrayTypeInfo")
 public final class Array<T> {
     // Constructors are handled with compiler magic.
     @InlineConstructor
+    @Suppress("TYPE_PARAMETER_AS_REIFIED")
     public constructor(size: Int, init: (Int) -> T): this(size) {
         var index = 0
         while (index < size) {

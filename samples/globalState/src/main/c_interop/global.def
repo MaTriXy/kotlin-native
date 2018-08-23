@@ -1,0 +1,12 @@
+package = global
+
+---
+typedef struct {
+  int x;
+  float f;
+  char* string;
+  void* kotlinObject;
+  void* frozenKotlinObject;
+} SharedData;
+
+SharedData sharedData;

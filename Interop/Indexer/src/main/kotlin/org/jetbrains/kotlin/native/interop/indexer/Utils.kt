@@ -140,7 +140,7 @@ internal fun CXTranslationUnit.ensureNoCompileErrors(): CXTranslationUnit {
 internal typealias CursorVisitor = (cursor: CValue<CXCursor>, parent: CValue<CXCursor>) -> CXChildVisitResult
 
 internal fun visitChildren(parent: CValue<CXCursor>, visitor: CursorVisitor) {
-    val visitorStableRef = StableObjPtr.create(visitor)
+    val visitorStableRef = StableRef.create(visitor)
     try {
         val clientData = visitorStableRef.asCPointer()
         clang_visitChildren(parent, staticCFunction { cursorIt, parentIt, clientDataIt ->
@@ -341,7 +341,7 @@ internal interface Indexer {
 }
 
 internal fun indexTranslationUnit(index: CXIndex, translationUnit: CXTranslationUnit, options: Int, indexer: Indexer) {
-    val indexerStableRef = StableObjPtr.create(indexer)
+    val indexerStableRef = StableRef.create(indexer)
     try {
         val clientData = indexerStableRef.asCPointer()
         memScoped {
@@ -598,4 +598,15 @@ fun createVfsOverlayFile(virtualPathToReal: Map<Path, Path>): Path {
         }
         deleteOnExit()
     }.toPath()
+}
+
+tailrec fun Type.unwrapTypedefs(): Type = if (this is Typedef) {
+    this.def.aliased.unwrapTypedefs()
+} else {
+    this
+}
+
+fun Type.canonicalIsPointerToChar(): Boolean {
+    val unwrappedType = this.unwrapTypedefs()
+    return unwrappedType is PointerType && unwrappedType.pointeeType.unwrapTypedefs() == CharType
 }

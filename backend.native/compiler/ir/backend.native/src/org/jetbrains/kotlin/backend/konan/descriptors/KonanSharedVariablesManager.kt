@@ -24,7 +24,6 @@ import org.jetbrains.kotlin.descriptors.PropertyDescriptor
 import org.jetbrains.kotlin.descriptors.VariableDescriptor
 import org.jetbrains.kotlin.descriptors.impl.LocalVariableDescriptor
 import org.jetbrains.kotlin.ir.IrStatement
-import org.jetbrains.kotlin.ir.declarations.IrConstructor
 import org.jetbrains.kotlin.ir.declarations.IrProperty
 import org.jetbrains.kotlin.ir.declarations.IrVariable
 import org.jetbrains.kotlin.ir.declarations.impl.IrVariableImpl
@@ -35,9 +34,9 @@ import org.jetbrains.kotlin.ir.expressions.impl.IrCallImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrCompositeImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrGetValueImpl
 import org.jetbrains.kotlin.ir.symbols.IrVariableSymbol
-import org.jetbrains.kotlin.ir.symbols.impl.IrVariableSymbolImpl
+import org.jetbrains.kotlin.ir.types.toKotlinType
+import org.jetbrains.kotlin.ir.types.typeWith
 import org.jetbrains.kotlin.ir.util.constructors
-import org.jetbrains.kotlin.ir.util.defaultType
 import org.jetbrains.kotlin.types.*
 
 internal class KonanSharedVariablesManager(val context: KonanBackendContext) : SharedVariablesManager {
@@ -48,9 +47,6 @@ internal class KonanSharedVariablesManager(val context: KonanBackendContext) : S
 
     private val elementProperty = refClass.owner.declarations.filterIsInstance<IrProperty>().single()
 
-    // TODO: refactor `SharedVariablesManager` interface instead of tracking the mapping:
-    private val sharedVariableDescriptorToSymbol = mutableMapOf<VariableDescriptor, IrVariableSymbol>()
-
     private fun refConstructor(elementType: KotlinType): ClassConstructorDescriptor {
         val typeParameter = refClassConstructor.descriptor.typeParameters[0]
 
@@ -60,17 +56,7 @@ internal class KonanSharedVariablesManager(val context: KonanBackendContext) : S
     }
 
     private fun refType(elementType: KotlinType): KotlinType {
-        return refClass.owner.defaultType.replace(listOf(TypeProjectionImpl(elementType)))
-    }
-
-    override fun createSharedVariableDescriptor(variableDescriptor: VariableDescriptor): VariableDescriptor {
-        return LocalVariableDescriptor(
-                variableDescriptor.containingDeclaration, variableDescriptor.annotations, variableDescriptor.name,
-                refType(variableDescriptor.type),
-                false, false, variableDescriptor.source
-        ).also {
-            sharedVariableDescriptorToSymbol[it] = IrVariableSymbolImpl(it)
-        }
+        return refClass.descriptor.defaultType.replace(listOf(TypeProjectionImpl(elementType)))
     }
 
     private fun getElementPropertyDescriptor(sharedVariableDescriptor: VariableDescriptor): PropertyDescriptor {
@@ -81,65 +67,77 @@ internal class KonanSharedVariablesManager(val context: KonanBackendContext) : S
                 }
     }
 
-    override fun defineSharedValue(sharedVariableDescriptor: VariableDescriptor,
-                                   originalDeclaration: IrVariable): IrStatement {
+    override fun declareSharedVariable(originalDeclaration: IrVariable): IrVariable {
+        val variableDescriptor = originalDeclaration.descriptor
+        val sharedVariableDescriptor = LocalVariableDescriptor(
+                variableDescriptor.containingDeclaration, variableDescriptor.annotations, variableDescriptor.name,
+                refType(variableDescriptor.type),
+                false, false, variableDescriptor.source
+        )
 
-        val sharedVariableSymbol = sharedVariableDescriptorToSymbol[sharedVariableDescriptor]!!
-
-        val valueType = originalDeclaration.descriptor.type
-
-        val refConstructorTypeArguments = mapOf(refClassConstructor.descriptor.typeParameters[0] to valueType)
+        val valueType = originalDeclaration.type
 
         val refConstructorCall = IrCallImpl(
                 originalDeclaration.startOffset, originalDeclaration.endOffset,
-                refClassConstructor, refConstructor(valueType), refConstructorTypeArguments
-        )
-        val sharedVariableDeclaration = IrVariableImpl(
+                refClass.typeWith(valueType),
+                refClassConstructor, refConstructor(valueType.toKotlinType()), 1
+        ).apply {
+            putTypeArgument(0, valueType)
+        }
+
+        return IrVariableImpl(
                 originalDeclaration.startOffset, originalDeclaration.endOffset, originalDeclaration.origin,
-                sharedVariableSymbol
+                sharedVariableDescriptor, refConstructorCall.type
         ).apply {
             initializer = refConstructorCall
         }
+    }
 
-        val initializer = originalDeclaration.initializer ?:
-                return sharedVariableDeclaration
+    override fun defineSharedValue(originalDeclaration: IrVariable, sharedVariableDeclaration: IrVariable): IrStatement {
+        val initializer = originalDeclaration.initializer ?: return sharedVariableDeclaration
 
-        val elementPropertyDescriptor = getElementPropertyDescriptor(sharedVariableDescriptor)
+        val elementPropertyDescriptor = getElementPropertyDescriptor(sharedVariableDeclaration.descriptor)
 
         val sharedVariableInitialization =
-                IrCallImpl(initializer.startOffset, initializer.endOffset, elementProperty.setter!!.symbol,
+                IrCallImpl(initializer.startOffset, initializer.endOffset,
+                        context.irBuiltIns.unitType, elementProperty.setter!!.symbol,
                         elementPropertyDescriptor.setter!!)
 
         sharedVariableInitialization.dispatchReceiver =
-                IrGetValueImpl(initializer.startOffset, initializer.endOffset, sharedVariableSymbol)
+                IrGetValueImpl(initializer.startOffset, initializer.endOffset,
+                        sharedVariableDeclaration.type, sharedVariableDeclaration.symbol)
 
         sharedVariableInitialization.putValueArgument(0, initializer)
 
         return IrCompositeImpl(
-                originalDeclaration.startOffset, originalDeclaration.endOffset, context.builtIns.unitType, null,
+                originalDeclaration.startOffset, originalDeclaration.endOffset, context.irBuiltIns.unitType, null,
                 listOf(sharedVariableDeclaration, sharedVariableInitialization)
         )
     }
 
-    override fun getSharedValue(sharedVariableDescriptor: VariableDescriptor, originalGet: IrGetValue): IrExpression {
-        val sharedVariableSymbol = sharedVariableDescriptorToSymbol[sharedVariableDescriptor]!!
+    override fun getSharedValue(sharedVariableSymbol: IrVariableSymbol, originalGet: IrGetValue): IrExpression {
 
-        val elementPropertyDescriptor = getElementPropertyDescriptor(sharedVariableDescriptor)
+        val elementPropertyDescriptor = getElementPropertyDescriptor(sharedVariableSymbol.descriptor)
 
-        return IrCallImpl(originalGet.startOffset, originalGet.endOffset, elementProperty.getter!!.symbol,
+        return IrCallImpl(originalGet.startOffset, originalGet.endOffset,
+                originalGet.type, elementProperty.getter!!.symbol,
                 elementPropertyDescriptor.getter!!).apply {
-            dispatchReceiver = IrGetValueImpl(originalGet.startOffset, originalGet.endOffset, sharedVariableSymbol)
+            dispatchReceiver = IrGetValueImpl(
+                    originalGet.startOffset, originalGet.endOffset,
+                    sharedVariableSymbol.owner.type, sharedVariableSymbol
+            )
         }
     }
 
-    override fun setSharedValue(sharedVariableDescriptor: VariableDescriptor, originalSet: IrSetVariable): IrExpression {
-        val sharedVariableSymbol = sharedVariableDescriptorToSymbol[sharedVariableDescriptor]!!
+    override fun setSharedValue(sharedVariableSymbol: IrVariableSymbol, originalSet: IrSetVariable): IrExpression {
+        val elementPropertyDescriptor = getElementPropertyDescriptor(sharedVariableSymbol.descriptor)
 
-        val elementPropertyDescriptor = getElementPropertyDescriptor(sharedVariableDescriptor)
-
-        return IrCallImpl(originalSet.startOffset, originalSet.endOffset, elementProperty.setter!!.symbol,
-                elementPropertyDescriptor.setter!!).apply {
-            dispatchReceiver = IrGetValueImpl(originalSet.startOffset, originalSet.endOffset, sharedVariableSymbol)
+        return IrCallImpl(originalSet.startOffset, originalSet.endOffset, context.irBuiltIns.unitType,
+                elementProperty.setter!!.symbol, elementPropertyDescriptor.setter!!).apply {
+            dispatchReceiver = IrGetValueImpl(
+                    originalSet.startOffset, originalSet.endOffset,
+                    sharedVariableSymbol.owner.type, sharedVariableSymbol
+            )
             putValueArgument(0, originalSet.value)
         }
     }

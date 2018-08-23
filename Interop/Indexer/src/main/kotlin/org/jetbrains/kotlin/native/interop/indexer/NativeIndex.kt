@@ -44,6 +44,7 @@ interface HeaderInclusionPolicy {
 data class NativeLibrary(val includes: List<String>,
                          val additionalPreambleLines: List<String>,
                          val compilerArgs: List<String>,
+                         val headerToIdMapper: HeaderToIdMapper,
                          val language: Language,
                          val excludeSystemLibs: Boolean, // TODO: drop?
                          val excludeDepdendentModules: Boolean,
@@ -135,12 +136,14 @@ sealed class ObjCContainer {
     abstract val properties: List<ObjCProperty>
 }
 
-sealed class ObjCClassOrProtocol(val name: String) : ObjCContainer(), TypeDeclaration
+sealed class ObjCClassOrProtocol(val name: String) : ObjCContainer(), TypeDeclaration {
+    abstract val isForwardDeclaration: Boolean
+}
 
 data class ObjCMethod(
         val selector: String, val encoding: String, val parameters: List<Parameter>, private val returnType: Type,
         val isClass: Boolean, val nsConsumesSelf: Boolean, val nsReturnsRetained: Boolean,
-        val isOptional: Boolean, val isInit: Boolean
+        val isOptional: Boolean, val isInit: Boolean, val isDesginatedInitializer: Boolean
 ) {
 
     fun returnsInstancetype(): Boolean = returnType is ObjCInstanceType
@@ -189,6 +192,7 @@ class TypedefDef(val aliased: Type, val name: String, override val location: Loc
 abstract class ConstantDef(val name: String, val type: Type)
 class IntegerConstantDef(name: String, type: Type, val value: Long) : ConstantDef(name, type)
 class FloatingConstantDef(name: String, type: Type, val value: Double) : ConstantDef(name, type)
+class StringConstantDef(name: String, type: Type, val value: String) : ConstantDef(name, type)
 
 class GlobalDecl(val name: String, val type: Type, val isConst: Boolean)
 

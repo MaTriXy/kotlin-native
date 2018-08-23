@@ -17,12 +17,15 @@
 package org.jetbrains.kotlin.konan.util
 
 import org.jetbrains.kotlin.konan.file.use
-import org.jetbrains.kotlin.konan.properties.KonanProperties
+import org.jetbrains.kotlin.konan.properties.KonanPropertiesLoader
 import org.jetbrains.kotlin.konan.properties.Properties
+import org.jetbrains.kotlin.konan.properties.propertyList
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.RandomAccessFile
+import java.net.InetAddress
 import java.net.URL
+import java.net.UnknownHostException
 import java.nio.file.Paths
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -42,50 +45,70 @@ private val Properties.downloadingAttemptIntervalMs : Long
     get() = getProperty("downloadingAttemptPauseMs")?.toLong()
             ?: DependencyDownloader.DEFAULT_ATTEMPT_INTERVAL_MS
 
-private val Properties.homeDependencyCache : String
-    get() = getProperty("homeDependencyCache") ?: DependencyProcessor.DEFAULT_HOME_DEPENDENCY_CACHE
+private fun Properties.findCandidates(dependencies: List<String>): Map<String, List<DependencySource>> {
+    val dependencyProfiles = this.propertyList("dependencyProfiles")
+    return dependencies.map { dependency ->
+        dependency to dependencyProfiles.flatMap { profile ->
+            val candidateSpecs = propertyList("$dependency.$profile")
+            if (profile == "default" && candidateSpecs.isEmpty()) {
+                listOf(DependencySource.Remote.Public)
+            } else {
+                candidateSpecs.map { candidateSpec ->
+                    when (candidateSpec) {
+                        "remote:public" -> DependencySource.Remote.Public
+                        "remote:internal" -> DependencySource.Remote.Internal
+                        else -> DependencySource.Local(File(candidateSpec))
+                    }
+                }
+            }
+        }
+    }.toMap()
+}
 
 
-private val KonanProperties.dependenciesUrl : String            get() = properties.dependenciesUrl
-private val KonanProperties.airplaneMode : Boolean              get() = properties.airplaneMode
-private val KonanProperties.downloadingAttempts : Int           get() = properties.downloadingAttempts
-private val KonanProperties.downloadingAttemptIntervalMs : Long get() = properties.downloadingAttemptIntervalMs
-private val KonanProperties.homeDependencyCache : String        get() = properties.homeDependencyCache
+private val KonanPropertiesLoader.dependenciesUrl : String            get() = properties.dependenciesUrl
+private val KonanPropertiesLoader.airplaneMode : Boolean              get() = properties.airplaneMode
+private val KonanPropertiesLoader.downloadingAttempts : Int           get() = properties.downloadingAttempts
+private val KonanPropertiesLoader.downloadingAttemptIntervalMs : Long get() = properties.downloadingAttemptIntervalMs
 
-// TODO: Try to use some dependency management system (Ivy?)
-// TODO: Maybe rename.
+sealed class DependencySource {
+    data class Local(val path: File) : DependencySource()
+
+    sealed class Remote : DependencySource() {
+        object Public : Remote()
+        object Internal : Remote()
+    }
+}
+
 /**
  * Inspects [dependencies] and downloads all the missing ones into [dependenciesDirectory] from [dependenciesUrl].
  * If [airplaneMode] is true will throw a RuntimeException instead of downloading.
  */
 class DependencyProcessor(dependenciesRoot: File,
                           val dependenciesUrl: String,
-                          val dependencies: Collection<String>,
-                          homeDependencyCache: String = DEFAULT_HOME_DEPENDENCY_CACHE,
+                          dependencyToCandidates: Map<String, List<DependencySource>>,
+                          homeDependencyCache: File = defaultDependencyCacheDir,
                           val airplaneMode: Boolean = false,
                           maxAttempts: Int = DependencyDownloader.DEFAULT_MAX_ATTEMPTS,
                           attemptIntervalMs: Long = DependencyDownloader.DEFAULT_ATTEMPT_INTERVAL_MS,
                           customProgressCallback: ProgressCallback? = null,
-                          val keepUnstable:Boolean = true) {
+                          val keepUnstable: Boolean = true) {
 
     val dependenciesDirectory = dependenciesRoot.apply { mkdirs() }
-    val cacheDirectory = System.getProperty("user.home")?.let {
-        Paths.get(it).resolve(homeDependencyCache).toFile().apply { mkdirs() }
-    } ?: dependenciesRoot
+    val cacheDirectory = homeDependencyCache.apply { mkdirs() }
 
     val lockFile = File(cacheDirectory, ".lock").apply { if (!exists()) createNewFile() }
 
     var showInfo = true
     private var isInfoShown = false
 
-    // TOOO: Rename pause -> interval
     private val downloader = DependencyDownloader(maxAttempts, attemptIntervalMs, customProgressCallback)
     private val extractor = DependencyExtractor()
 
     private val archiveExtension get() = extractor.archiveExtension
 
     constructor(dependenciesRoot: File,
-                properties: KonanProperties,
+                properties: KonanPropertiesLoader,
                 dependenciesUrl: String = properties.dependenciesUrl,
                 keepUnstable:Boolean = true) : this(
             dependenciesRoot,
@@ -101,7 +124,7 @@ class DependencyProcessor(dependenciesRoot: File,
                 keepUnstable:Boolean = true) : this(
             dependenciesRoot,
             dependenciesUrl,
-            dependencies,
+            dependencyToCandidates = properties.findCandidates(dependencies),
             airplaneMode = properties.airplaneMode,
             maxAttempts = properties.downloadingAttempts,
             attemptIntervalMs = properties.downloadingAttemptIntervalMs,
@@ -137,13 +160,13 @@ class DependencyProcessor(dependenciesRoot: File,
         }
     }
 
-    private fun processDependency(dependency: String) {
+    private fun downloadDependency(dependency: String, baseUrl: String) {
         val depDir = File(dependenciesDirectory, dependency)
         val depName = depDir.name
 
         val fileName = "$depName.$archiveExtension"
         val archive = cacheDirectory.resolve(fileName)
-        val url = URL("$dependenciesUrl/$fileName")
+        val url = URL("$baseUrl/$fileName")
 
         val extractedDependencies = DependencyFile(dependenciesDirectory, ".extracted")
         if (extractedDependencies.contains(depName) &&
@@ -183,18 +206,100 @@ class DependencyProcessor(dependenciesRoot: File,
     companion object {
         private val lock = ReentrantLock()
 
-        const val DEFAULT_HOME_DEPENDENCY_CACHE = ".konan/cache"
+        val localKonanDir: File by lazy {
+            File(System.getenv("KONAN_DATA_DIR") ?: (System.getProperty("user.home") + File.separator + ".konan"))
+        }
 
         @JvmStatic
-        val defaultDependenciesRoot
-            get() = Paths.get(System.getProperty("user.home")).resolve(".konan/dependencies").toFile()
+        val defaultDependenciesRoot: File
+            get() = localKonanDir.resolve("dependencies")
+
+        val defaultDependencyCacheDir: File
+            get() = localKonanDir.resolve("cache")
+    }
+
+    private val resolvedDependencies = dependencyToCandidates.map { (dependency, candidates) ->
+        val candidate = candidates.asSequence().mapNotNull { candidate ->
+            when (candidate) {
+                is DependencySource.Local -> candidate.takeIf { it.path.exists() }
+                DependencySource.Remote.Public -> candidate
+                DependencySource.Remote.Internal -> candidate.takeIf { InternalServer.isAvailable }
+            }
+        }.firstOrNull()
+
+        candidate ?: error("$dependency is not available; candidates:\n${candidates.joinToString("\n")}")
+
+        dependency to candidate
+    }.toMap()
+
+    private fun resolveDependency(dependency: String): File {
+        val candidate = resolvedDependencies[dependency]
+        return when (candidate) {
+            is DependencySource.Local -> candidate.path
+            is DependencySource.Remote -> File(dependenciesDirectory, dependency)
+            null -> error("$dependency not declared as dependency")
+        }
+    }
+
+    fun resolveRelative(relative: String): File {
+        val path = Paths.get(relative)
+        if (path.isAbsolute) error("not a relative path: $relative")
+
+        val dependency = path.first().toString()
+        return resolveDependency(dependency).let {
+            if (path.nameCount > 1) {
+                it.toPath().resolve(path.subpath(1, path.nameCount)).toFile()
+            } else {
+                it
+            }
+        }
     }
 
     fun run() = lock.withLock {
         RandomAccessFile(lockFile, "rw").channel.lock().use {
-            dependencies.forEach {
-                processDependency(it)
+            resolvedDependencies.forEach { (dependency, candidate) ->
+                val baseUrl = when (candidate) {
+                    is DependencySource.Local -> null
+                    DependencySource.Remote.Public -> dependenciesUrl
+                    DependencySource.Remote.Internal -> InternalServer.url
+                }
+                // TODO: consider using different caches for different remotes.
+                if (baseUrl != null) {
+                    downloadDependency(dependency, baseUrl)
+                }
             }
+        }
+    }
+}
+
+internal object InternalServer {
+    private val host = "repo.labs.intellij.net"
+    val url = "http://$host/kotlin-native"
+
+    private val internalDomain = "labs.intellij.net"
+
+    val isAvailable by lazy {
+        val envKey = "KONAN_USE_INTERNAL_SERVER"
+        val envValue = System.getenv(envKey)
+        when (envValue) {
+            "0" -> false
+            "1" -> true
+            null -> checkAccessible()
+            else -> error("unexpected environment: $envKey=$envValue")
+        }
+    }
+
+    private fun checkAccessible(): Boolean {
+        if (!InetAddress.getLocalHost().canonicalHostName.endsWith(".$internalDomain")) {
+            // Fast path:
+            return false
+        }
+
+        try {
+            InetAddress.getByName(host)
+            return true
+        } catch (e: UnknownHostException) {
+            return false
         }
     }
 }

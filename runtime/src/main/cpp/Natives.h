@@ -63,8 +63,7 @@ inline T* PrimitiveArrayAddressOfElementAt(ArrayHeader* obj, KInt index) {
 }
 
 template <typename T>
-inline const T* PrimitiveArrayAddressOfElementAt(
-    const ArrayHeader* obj, KInt index) {
+inline const T* PrimitiveArrayAddressOfElementAt(const ArrayHeader* obj, KInt index) {
   return reinterpret_cast<const T*>(obj + 1) + index;
 }
 
@@ -123,6 +122,7 @@ OBJ_GETTER(Kotlin_Int_toString, KInt value);
 KInt Kotlin_String_hashCode(KString thiz);
 KBoolean Kotlin_String_equals(KString thiz, KConstRef other);
 KInt Kotlin_String_compareTo(KString thiz, KString other);
+KInt Kotlin_String_compareToIgnoreCase(KString thiz, KConstRef other);
 KChar Kotlin_String_get(KString thiz, KInt index);
 OBJ_GETTER(Kotlin_String_fromUtf8Array, KConstRef array, KInt start, KInt size);
 OBJ_GETTER(Kotlin_String_fromCharArray, KConstRef array, KInt start, KInt size);
@@ -132,10 +132,10 @@ OBJ_GETTER(Kotlin_String_subSequence, KString thiz, KInt startIndex, KInt endInd
 
 OBJ_GETTER0(Kotlin_getCurrentStackTrace);
 
-OBJ_GETTER0(Kotlin_konan_internal_undefined);
+OBJ_GETTER0(Kotlin_native_internal_undefined);
 
-void Kotlin_konan_internal_GC_suspend(KRef);
-void Kotlin_konan_internal_GC_resume(KRef);
+void Kotlin_native_internal_GC_suspend(KRef);
+void Kotlin_native_internal_GC_resume(KRef);
 
 #ifdef __cplusplus
 }

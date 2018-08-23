@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import konan.internal.ExportForCppRuntime
+import kotlin.native.internal.ExportForCppRuntime
 
 // This function is produced by the code generator given
 // the '-entry foo.bar.main' flag. 
@@ -26,7 +26,6 @@ external fun EntryPointSelector(args: Array<String>)
 @ExportForCppRuntime
 private fun Konan_start(args: Array<String>): Int {
     try {
-
         EntryPointSelector(args)
 
         // Successfully finished:

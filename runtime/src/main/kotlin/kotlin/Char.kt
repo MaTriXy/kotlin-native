@@ -20,7 +20,7 @@ package kotlin
  * Represents a 16-bit Unicode character.
  * On the JVM, non-nullable values of this type are represented as values of the primitive type `char`.
  */
-public final class Char : Comparable<Char> {
+public final class Char private constructor(private val value: kotlin.native.internal.ShortValue) : Comparable<Char> {
 
     /**
      * Compares this value with the specified value for order.
@@ -76,6 +76,29 @@ public final class Char : Comparable<Char> {
     external public fun toDouble(): Double
 
     companion object {
+        /**
+         * The minimum value of a character code unit.
+         */
+        @SinceKotlin("1.3")
+        public const val MIN_VALUE: Char = '\u0000'
+
+        /**
+         * The maximum value of a character code unit.
+         */
+        @SinceKotlin("1.3")
+        public const val MAX_VALUE: Char = '\uFFFF'
+
+        /**
+         * The number of bytes used to represent a Char in a binary form.
+         */
+        @SinceKotlin("1.3")
+        public const val SIZE_BYTES: Int = 2
+        /**
+         * The number of bits used to represent a Char in a binary form.
+         */
+        @SinceKotlin("1.3")
+        public const val SIZE_BITS: Int = 16
+
         /**
          * The minimum value of a Unicode high-surrogate code unit.
          */
@@ -133,10 +156,10 @@ public final class Char : Comparable<Char> {
     }
 
     // Konan-specific.
-    public fun equals(other: Char): Boolean = konan.internal.areEqualByValue(this, other)
+    public fun equals(other: Char): Boolean = this == other
 
     public override fun equals(other: Any?): Boolean =
-            other is Char && konan.internal.areEqualByValue(this, other)
+            other is Char && this.equals(other)
 
     @SymbolName("Kotlin_Char_toString")
     external public override fun toString(): String

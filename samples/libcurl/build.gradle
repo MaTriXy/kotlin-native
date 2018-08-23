@@ -2,6 +2,9 @@ apply plugin: 'konan'
 
 konan.targets = ['macbook', 'linux']
 
+group 'org.jetbrains.kotlin.native'
+version '1.0'
+
 konanArtifacts {
     interop('libcurl') {
         target('linux') {
@@ -10,11 +13,38 @@ konanArtifacts {
         target('macbook') {
             includeDirs.headerFilterOnly '/opt/local/include', '/usr/local/include'
         }
-    }
-
-    program('Curl') {
-        libraries {
-            artifact 'libcurl'
+        pom {
+            withXml {
+                def root = asNode()
+                root.appendNode('name', 'libcurl interop library')
+                root.appendNode('description', 'A library providing interoperability with host libcurl')
+            }
         }
     }
+}
+
+apply plugin: 'maven-publish'
+def localMavenRepo="file://${new File(System.properties['user.home'] as String)}/.m2-kotlin-native"
+
+task cleanLocalRepo(type: Delete) {
+    delete localMavenRepo
+}
+
+publishing {
+    publications{
+        libcurl(MavenPublication) {
+            artifact sourceJar{
+                classifier "source"
+            }
+        }
+    }
+    repositories {
+        maven {
+            url = localMavenRepo
+        }
+    }
+}
+
+task sourceJar(type: Jar) {
+    from project.files('src/main')
 }

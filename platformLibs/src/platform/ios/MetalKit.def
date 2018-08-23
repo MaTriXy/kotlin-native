@@ -1,0 +1,9 @@
+depends = CFNetwork CoreFoundation CoreGraphics CoreImage CoreText CoreVideo EAGL FileProvider Foundation IOSurface ImageIO Metal ModelIO OpenGLESCommon QuartzCore Security UIKit darwin posix
+language = Objective-C
+package = platform.MetalKit
+headers = MetalKit/MetalKit.h
+
+headerFilter = MetalKit/**
+
+compilerOpts = -framework MetalKit
+linkerOpts = -framework MetalKit

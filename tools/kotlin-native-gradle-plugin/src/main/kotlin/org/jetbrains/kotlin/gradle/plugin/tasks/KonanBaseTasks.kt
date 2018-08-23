@@ -20,23 +20,36 @@ import groovy.lang.Closure
 import org.gradle.api.Action
 import org.gradle.api.DefaultTask
 import org.gradle.api.Project
-import org.gradle.api.tasks.Input
-import org.gradle.api.tasks.Internal
-import org.gradle.api.tasks.Nested
-import org.gradle.api.tasks.OutputFile
+import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.DependencyConstraint
+import org.gradle.api.artifacts.ModuleDependency
+import org.gradle.api.artifacts.PublishArtifact
+import org.gradle.api.attributes.Attribute
+import org.gradle.api.attributes.AttributeContainer
+import org.gradle.api.attributes.Usage
+import org.gradle.api.capabilities.Capability
+import org.gradle.api.internal.component.UsageContext
+import org.gradle.api.internal.tasks.DefaultTaskDependency
+import org.gradle.api.tasks.*
+import org.gradle.language.cpp.CppBinary
+import org.gradle.language.cpp.internal.DefaultUsageContext
+import org.gradle.language.cpp.internal.NativeVariantIdentity
+import org.gradle.language.nativeplatform.internal.Names
+import org.gradle.nativeplatform.Linkage
+import org.gradle.nativeplatform.OperatingSystemFamily
 import org.gradle.util.ConfigureUtil
-import org.jetbrains.kotlin.gradle.plugin.KonanArtifactSpec
-import org.jetbrains.kotlin.gradle.plugin.KonanArtifactWithLibrariesSpec
-import org.jetbrains.kotlin.gradle.plugin.KonanLibrariesSpec
+import org.jetbrains.kotlin.gradle.plugin.*
+import org.jetbrains.kotlin.konan.target.Family
+import org.jetbrains.kotlin.konan.target.HostManager
 import org.jetbrains.kotlin.konan.target.KonanTarget
-import org.jetbrains.kotlin.konan.target.TargetManager
 import java.io.File
+import java.util.*
 
 internal val Project.host
-    get() = TargetManager.host.name.toLowerCase()
+    get() = HostManager.host.visibleName
 
 internal val Project.simpleOsName
-    get() = TargetManager.simpleOsName()
+    get() = HostManager.simpleOsName()
 
 /** A task with a KonanTarget specified. */
 abstract class KonanTargetableTask: DefaultTask() {
@@ -47,27 +60,26 @@ abstract class KonanTargetableTask: DefaultTask() {
         this.konanTarget = target
     }
 
-    val targetIsSupported: Boolean
-        @Internal get() = konanTarget.enabled
-
     val isCrossCompile: Boolean
-        @Internal get() = (konanTarget != TargetManager.host)
+        @Internal get() = (konanTarget != HostManager.host)
 
     val target: String
-        @Internal get() = konanTarget.userName
+        @Internal get() = konanTarget.visibleName
 }
 
 /** A task building an artifact. */
 abstract class KonanArtifactTask: KonanTargetableTask(), KonanArtifactSpec {
 
     open val artifact: File
-        @OutputFile get() = destinationDir.resolve(artifactNameWithSuffix)
+        @OutputFile get() = destinationDir.resolve(artifactFullName)
 
     @Internal lateinit var destinationDir: File
     @Internal lateinit var artifactName: String
+    @Internal lateinit var platformConfiguration: Configuration
+    @Internal lateinit var configuration: Configuration
 
-    protected val artifactNameWithSuffix: String
-        @Internal get() = "$artifactName$artifactSuffix"
+    protected val artifactFullName: String
+        @Internal get() = "$artifactPrefix$artifactName$artifactSuffix"
 
     val artifactPath: String
         @Internal get() = artifact.canonicalPath
@@ -75,12 +87,68 @@ abstract class KonanArtifactTask: KonanTargetableTask(), KonanArtifactSpec {
     protected abstract val artifactSuffix: String
         @Internal get
 
-    internal open fun init(destinationDir: File, artifactName: String, target: KonanTarget) {
+    protected abstract val artifactPrefix: String
+        @Internal get
+
+    internal open fun init(config:KonanBuildingConfig<*>, destinationDir: File, artifactName: String, target: KonanTarget) {
         super.init(target)
         this.destinationDir = destinationDir
         this.artifactName = artifactName
+        configuration = project.configurations.maybeCreate("artifact$artifactName")
+        platformConfiguration = project.configurations.create("artifact${artifactName}_${target.name}")
+        platformConfiguration.extendsFrom(configuration)
+        platformConfiguration.attributes{
+            it.attribute(Usage.USAGE_ATTRIBUTE, project.objects.named(Usage::class.java, Usage.NATIVE_LINK))
+            it.attribute(CppBinary.LINKAGE_ATTRIBUTE, Linkage.STATIC)
+            it.attribute(CppBinary.OPTIMIZED_ATTRIBUTE, false)
+            it.attribute(CppBinary.DEBUGGABLE_ATTRIBUTE, false)
+            it.attribute(Attribute.of("org.gradle.native.kotlin.platform", String::class.java), target.name)
+        }
+
+        val artifactNameWithoutSuffix = artifact.name.removeSuffix("$artifactSuffix")
+        project.pluginManager.withPlugin("maven-publish") {
+            if (!(project.getProperty(KonanPlugin.ProjectProperty.KONAN_PUBLICATION_ENABLED) as Boolean))
+                return@withPlugin
+            platformConfiguration.artifacts.add(object: PublishArtifact {
+                override fun getName(): String = artifactNameWithoutSuffix
+                override fun getExtension() = if (artifactSuffix.startsWith('.')) artifactSuffix.substring(1) else artifactSuffix
+                override fun getType() = artifactSuffix
+                override fun getClassifier():String? = target.name
+                override fun getFile() = artifact
+                override fun getDate() = Date(artifact.lastModified())
+                override fun getBuildDependencies(): TaskDependency =
+                        DefaultTaskDependency().apply { add(this@KonanArtifactTask) }
+            })
+            val objectFactory = project.objects
+            val linkUsage = objectFactory.named(Usage::class.java, Usage.NATIVE_LINK)
+            val konanSoftwareComponent = config.mainVariant
+            val variantName = "${artifactNameWithoutSuffix}_${target.name}"
+            val context = DefaultUsageContext(object:UsageContext {
+                override fun getUsage(): Usage = linkUsage
+                override fun getName(): String = "${variantName}Link"
+                override fun getCapabilities(): MutableSet<out Capability> = mutableSetOf()
+                override fun getDependencies(): MutableSet<out ModuleDependency> = mutableSetOf()
+                override fun getDependencyConstraints(): MutableSet<out DependencyConstraint> = mutableSetOf()
+                override fun getArtifacts(): MutableSet<out PublishArtifact> = platformConfiguration.allArtifacts
+                override fun getAttributes(): AttributeContainer = platformConfiguration.attributes
+            }, platformConfiguration.allArtifacts, platformConfiguration)
+            konanSoftwareComponent.addVariant(NativeVariantIdentity(
+                    variantName,
+                    project.provider{ artifactName },
+                    project.provider{ project.group.toString() },
+                    project.provider{ project.version.toString() },
+                    false,
+                    false,
+                    target.asOperatingSystemFamily(),
+                    context,
+                    null))
+        }
     }
 
+    fun dependencies(closure: Closure<Unit>) {
+        if (konanTarget in project.konanTargets)
+            project.dependencies(closure)
+    }
     // DSL.
 
     override fun artifactName(name: String) {
@@ -90,6 +158,9 @@ abstract class KonanArtifactTask: KonanTargetableTask(), KonanArtifactSpec {
     fun destinationDir(dir: Any) {
         destinationDir = project.file(dir)
     }
+
+    private fun KonanTarget.asOperatingSystemFamily(): OperatingSystemFamily = project.objects.named(OperatingSystemFamily::class.java, family.name)
+
 }
 
 /** Task building an artifact with libraries */

@@ -19,7 +19,6 @@ package org.jetbrains.kotlin.backend.konan.llvm
 import llvm.*
 import org.jetbrains.kotlin.backend.konan.Context
 import org.jetbrains.kotlin.ir.expressions.IrConst
-import org.jetbrains.kotlin.types.KotlinType
 
 /**
  * Provides utilities to create static data.
@@ -162,9 +161,9 @@ internal class StaticData(override val context: Context): ContextUtils {
     /**
      * Creates array-typed global with given name and value.
      */
-    fun placeGlobalArray(name: String, elemType: LLVMTypeRef?, elements: List<ConstValue>): Global {
+    fun placeGlobalArray(name: String, elemType: LLVMTypeRef?, elements: List<ConstValue>, isExported: Boolean = false): Global {
         val initializer = ConstArray(elemType, elements)
-        val global = placeGlobal(name, initializer)
+        val global = placeGlobal(name, initializer, isExported)
 
         return global
     }
@@ -184,7 +183,7 @@ internal class StaticData(override val context: Context): ContextUtils {
  *
  * @param args data for constant creation.
  */
-internal fun StaticData.createImmutableBinaryBlob(value: IrConst<String>): LLVMValueRef {
+internal fun StaticData.createImmutableBlob(value: IrConst<String>): LLVMValueRef {
     val args = value.value.map { Int8(it.toByte()).llvm }
-    return createKotlinArray(context.ir.symbols.immutableBinaryBlob.descriptor.defaultType, args)
+    return createKotlinArray(context.ir.symbols.immutableBlob.owner, args)
 }

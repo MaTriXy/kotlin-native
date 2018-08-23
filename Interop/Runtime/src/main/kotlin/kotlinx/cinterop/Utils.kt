@@ -395,6 +395,7 @@ val String.wcstr: CValues<ShortVar>
  *
  * @return the [kotlin.String] decoded from given zero-terminated UTF-8-encoded C string.
  */
+// TODO: optimize
 fun CPointer<ByteVar>.toKString(): String {
     val nativeBytes = this
 
@@ -412,6 +413,9 @@ class MemScope : ArenaBase() {
 
     val memScope: MemScope
         get() = this
+
+    val <T: CVariable> CValues<T>.ptr: CPointer<T>
+        get() = this@ptr.getPointer(this@MemScope)
 }
 
 // TODO: consider renaming `memScoped` because it now supports `defer`.

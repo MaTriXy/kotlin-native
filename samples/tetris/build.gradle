@@ -1,6 +1,9 @@
 apply plugin: 'konan'
 
-konan.targets = ['macbook', 'linux', 'iphone', 'raspberrypi']
+konan.targets = ['macbook', 'linux', 'raspberrypi', 'mingw']
+
+def konanUserDir = System.getenv("KONAN_DATA_DIR") ?: "${System.getProperty("user.home")}/.konan"
+def resFile = file("$buildDir/konan/res/Tetris.res")
 
 konanArtifacts {
 
@@ -19,12 +22,12 @@ konanArtifacts {
             includeDirs '/usr/include/SDL2'
         }
 
-        target 'iphone', {
-            includeDirs "${System.getProperty("user.home")}/.konan/dependencies/target-sysroot-2-darwin-ios/System/Library/Frameworks/SDL2.framework/Headers"
+        target 'raspberrypi', {
+            includeDirs "$konanUserDir/dependencies/target-sysroot-1-raspberrypi/usr/include/SDL2"
         }
 
-        target 'raspberrypi', {
-            includeDirs "${System.getProperty("user.home")}/.konan/dependencies/target-sysroot-1-raspberrypi/usr/include/SDL2"
+        target 'mingw', {
+            includeDirs "${System.getenv("MINGW64_DIR")?:"c:/msys64/mingw64"}/include/SDL2"
         }
     }
 
@@ -40,20 +43,32 @@ konanArtifacts {
         }
 
         target 'linux', {
-            linkerOpts '-L/usr/lib/x86_64-linux-gnu -lSDL2'
-        }
-
-        target 'iphone', {
-            linkerOpts '-framework SDL2 -framework AVFoundation -framework CoreGraphics -framework CoreMotion ' +
-                    '-framework Foundation -framework GameController -framework AudioToolbox -framework OpenGLES ' +
-                    '-framework QuartzCore -framework UIKit'
-            noMain true
+            linkerOpts '-L/usr/lib64 -L/usr/lib/x86_64-linux-gnu -lSDL2'
         }
 
         target 'raspberrypi', {
             linkerOpts '-lSDL2'
         }
+
+        target 'mingw', {
+            linkerOpts "$resFile -L${System.getenv("MINGW64_DIR")?:"c:/msys64/mingw64"}/lib -Wl,-Bstatic -lstdc++ -static -lSDL2 -limm32 -lole32 -loleaut32 -lversion -lwinmm -mwindows"
+            dependsOn 'windowsResources'
+            inputs.file resFile
+        }
     }
+}
+
+task windowsResources (type: Exec) {
+    def rcFile = file('Tetris.rc')
+    def path = System.getenv("PATH")
+
+    def windresDir = "$konanUserDir/dependencies/msys2-mingw-w64-x86_64-gcc-7.3.0-clang-llvm-lld-6.0.1/bin"
+
+    commandLine "$windresDir/windres", rcFile, '-O', 'coff', '-o', resFile
+    environment 'PATH', "$windresDir;$path"
+
+    inputs.file rcFile
+    outputs.file resFile
 }
 
 compileKonan {

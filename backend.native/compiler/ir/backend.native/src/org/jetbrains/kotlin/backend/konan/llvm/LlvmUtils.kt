@@ -18,7 +18,7 @@ package org.jetbrains.kotlin.backend.konan.llvm
 
 import kotlinx.cinterop.*
 import llvm.*
-import org.jetbrains.kotlin.backend.konan.descriptors.LlvmSymbolOrigin
+import org.jetbrains.kotlin.descriptors.konan.CompiledKonanModuleOrigin
 
 internal val LLVMValueRef.type: LLVMTypeRef
     get() = LLVMTypeOf(this)!!
@@ -27,7 +27,6 @@ internal val LLVMValueRef.type: LLVMTypeRef
  * Represents the value which can be emitted as bitcode const value
  */
 internal interface ConstValue {
-
     val llvm: LLVMValueRef
 }
 
@@ -54,9 +53,8 @@ private class ConstGetElementPtr(val pointer: ConstPointer, val index: Int) : Co
 
 internal fun ConstPointer.bitcast(toType: LLVMTypeRef) = constPointer(LLVMConstBitCast(this.llvm, toType)!!)
 
-internal class ConstArray(val elemType: LLVMTypeRef?, val elements: List<ConstValue>) : ConstValue {
-
-    override val llvm = LLVMConstArray(elemType, elements.map { it.llvm }.toCValues(), elements.size)!!
+internal class ConstArray(elementType: LLVMTypeRef?, val elements: List<ConstValue>) : ConstValue {
+    override val llvm = LLVMConstArray(elementType, elements.map { it.llvm }.toCValues(), elements.size)!!
 }
 
 internal open class Struct(val type: LLVMTypeRef?, val elements: List<ConstValue?>) : ConstValue {
@@ -108,7 +106,7 @@ internal class Zero(val type: LLVMTypeRef) : ConstValue {
     override val llvm = LLVMConstNull(type)!!
 }
 
-internal class NullPointer(val pointeeType: LLVMTypeRef): ConstPointer {
+internal class NullPointer(pointeeType: LLVMTypeRef): ConstPointer {
     override val llvm = LLVMConstNull(pointerType(pointeeType))!!
 }
 
@@ -124,6 +122,7 @@ internal val int1Type = LLVMInt1Type()!!
 internal val int8Type = LLVMInt8Type()!!
 internal val int16Type = LLVMInt16Type()!!
 internal val int32Type = LLVMInt32Type()!!
+internal val int64Type = LLVMInt64Type()!!
 internal val int8TypePtr = pointerType(int8Type)
 
 internal val voidType = LLVMVoidType()!!
@@ -144,12 +143,10 @@ internal val RuntimeAware.kTypeInfoPtr: LLVMTypeRef
     get() = pointerType(kTypeInfo)
 internal val kInt1         = LLVMInt1Type()!!
 internal val kBoolean      = kInt1
-internal val kInt64        = LLVMInt64Type()!!
 internal val kInt8Ptr      = pointerType(int8Type)
 internal val kInt8PtrPtr   = pointerType(kInt8Ptr)
 internal val kNullInt8Ptr  = LLVMConstNull(kInt8Ptr)!!
 internal val kImmInt32One  = Int32(1).llvm
-internal val kImmInt64One  = Int64(1).llvm
 internal val ContextUtils.kNullObjHeaderPtr: LLVMValueRef
     get() = LLVMConstNull(this.kObjHeaderPtr)!!
 internal val ContextUtils.kNullObjHeaderPtrPtr: LLVMValueRef
@@ -205,11 +202,11 @@ internal fun ContextUtils.addGlobal(name: String, type: LLVMTypeRef, isExported:
         assert(LLVMGetNamedGlobal(context.llvmModule, name) == null)
     val result = LLVMAddGlobal(context.llvmModule, type, name)!!
     if (threadLocal)
-        LLVMSetThreadLocalMode(result, runtime.tlsMode)
+        LLVMSetThreadLocalMode(result, context.llvm.tlsMode)
     return result
 }
 
-internal fun ContextUtils.importGlobal(name: String, type: LLVMTypeRef, origin: LlvmSymbolOrigin,
+internal fun ContextUtils.importGlobal(name: String, type: LLVMTypeRef, origin: CompiledKonanModuleOrigin,
                                        threadLocal: Boolean = false): LLVMValueRef {
 
     context.llvm.imports.add(origin)
@@ -219,12 +216,12 @@ internal fun ContextUtils.importGlobal(name: String, type: LLVMTypeRef, origin: 
         assert (getGlobalType(found) == type)
         assert (LLVMGetInitializer(found) == null)
         if (threadLocal)
-            assert(LLVMGetThreadLocalMode(found) == runtime.tlsMode)
+            assert(LLVMGetThreadLocalMode(found) == context.llvm.tlsMode)
         return found
     } else {
         val result = LLVMAddGlobal(context.llvmModule, type, name)!!
         if (threadLocal)
-            LLVMSetThreadLocalMode(result, runtime.tlsMode)
+            LLVMSetThreadLocalMode(result, context.llvm.tlsMode)
         return result
     }
 }
@@ -307,3 +304,8 @@ internal fun String.mdString() = LLVMMDString(this, this.length)!!
 internal fun node(vararg it:LLVMValueRef) = LLVMMDNode(it.toList().toCValues(), it.size)
 
 internal fun LLVMValueRef.setUnaligned() = apply { LLVMSetAlignment(this, 1) }
+
+fun LLVMTypeRef.isFloatingPoint(): Boolean = when (llvm.LLVMGetTypeKind(this)) {
+    LLVMTypeKind.LLVMFloatTypeKind, LLVMTypeKind.LLVMDoubleTypeKind -> true
+    else -> false
+}

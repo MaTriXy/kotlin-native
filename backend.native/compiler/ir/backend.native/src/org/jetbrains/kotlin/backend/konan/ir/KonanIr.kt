@@ -16,19 +16,29 @@
 
 package org.jetbrains.kotlin.backend.konan.ir
 
-import org.jetbrains.kotlin.descriptors.PackageFragmentDescriptor
+import org.jetbrains.kotlin.backend.konan.optimizations.DataFlowIR
+import org.jetbrains.kotlin.descriptors.*
 import org.jetbrains.kotlin.descriptors.annotations.AnnotationDescriptor
 import org.jetbrains.kotlin.ir.SourceManager
 import org.jetbrains.kotlin.ir.SourceRangeInfo
 import org.jetbrains.kotlin.ir.declarations.IrDeclaration
 import org.jetbrains.kotlin.ir.declarations.IrFile
 import org.jetbrains.kotlin.ir.declarations.IrVariable
+import org.jetbrains.kotlin.ir.expressions.IrCall
+import org.jetbrains.kotlin.ir.expressions.IrClassReference
 import org.jetbrains.kotlin.ir.expressions.IrExpression
+import org.jetbrains.kotlin.ir.expressions.impl.IrCallWithIndexedArgumentsBase
 import org.jetbrains.kotlin.ir.expressions.impl.IrExpressionBase
+import org.jetbrains.kotlin.ir.expressions.impl.IrTerminalDeclarationReferenceBase
+import org.jetbrains.kotlin.ir.symbols.IrClassSymbol
+import org.jetbrains.kotlin.ir.symbols.IrClassifierSymbol
 import org.jetbrains.kotlin.ir.symbols.IrFileSymbol
+import org.jetbrains.kotlin.ir.symbols.IrFunctionSymbol
+import org.jetbrains.kotlin.ir.types.IrType
 import org.jetbrains.kotlin.ir.visitors.IrElementTransformer
 import org.jetbrains.kotlin.ir.visitors.IrElementVisitor
 import org.jetbrains.kotlin.konan.file.File
+import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.types.KotlinType
 
 //-----------------------------------------------------------------------------//
@@ -99,6 +109,10 @@ class IrFileImpl(entry: SourceManager.FileEntry) : IrFile {
 
     //-------------------------------------------------------------------------//
 
+    override val annotations: MutableList<IrCall>
+        get() = TODO("not implemented")
+    override val fqName: FqName
+        get() = TODO("not implemented")
     override val fileAnnotations: MutableList<AnnotationDescriptor>
         get() = TODO("not implemented")
     override val symbol: IrFileSymbol
@@ -124,53 +138,66 @@ class IrFileImpl(entry: SourceManager.FileEntry) : IrFile {
 
 //-----------------------------------------------------------------------------//
 
-interface IrSuspensionPoint : IrExpression {
-    var suspensionPointIdParameter: IrVariable
-    var result: IrExpression
-    var resumeResult: IrExpression
+internal interface IrPrivateFunctionCall : IrCall {
+    val virtualCallee: IrCall?
+    val dfgSymbol: DataFlowIR.FunctionSymbol.Declared
+    val moduleDescriptor: ModuleDescriptor
+    val totalFunctions: Int
+    val functionIndex: Int
 }
 
-interface IrSuspendableExpression : IrExpression {
-    var suspensionPointId: IrExpression
-    var result: IrExpression
-}
+internal class IrPrivateFunctionCallImpl(startOffset: Int,
+                                         endOffset: Int,
+                                         type: IrType,
+                                         override val symbol: IrFunctionSymbol,
+                                         override val descriptor: FunctionDescriptor,
+                                         override val virtualCallee: IrCall?,
+                                         typeArgumentsCount: Int,
+                                         override val dfgSymbol: DataFlowIR.FunctionSymbol.Declared,
+                                         override val moduleDescriptor: ModuleDescriptor,
+                                         override val totalFunctions: Int,
+                                         override val functionIndex: Int
+) : IrPrivateFunctionCall, IrCallWithIndexedArgumentsBase(
+        startOffset,
+        endOffset,
+        type,
+        typeArgumentsCount = typeArgumentsCount,
+        valueArgumentsCount = symbol.descriptor.valueParameters.size
+) {
 
-class IrSuspensionPointImpl(startOffset: Int, endOffset: Int, type: KotlinType,
-                            override var suspensionPointIdParameter: IrVariable,
-                            override var result: IrExpression,
-                            override var resumeResult: IrExpression)
-    : IrExpressionBase(startOffset, endOffset, type), IrSuspensionPoint {
+    override val superQualifierSymbol: IrClassSymbol?
+        get() = null
+
+    override val superQualifier: ClassDescriptor?
+        get() = null
 
     override fun <R, D> accept(visitor: IrElementVisitor<R, D>, data: D): R =
-            visitor.visitExpression(this, data)
+            visitor.visitCall(this, data)
 
-    override fun <D> acceptChildren(visitor: IrElementVisitor<Unit, D>, data: D) {
-        suspensionPointIdParameter.accept(visitor, data)
-        result.accept(visitor, data)
-        resumeResult.accept(visitor, data)
-    }
-
-    override fun <D> transformChildren(transformer: IrElementTransformer<D>, data: D) {
-        suspensionPointIdParameter = suspensionPointIdParameter.transform(transformer, data) as IrVariable
-        result = result.transform(transformer, data)
-        resumeResult = resumeResult.transform(transformer, data)
-    }
 }
 
-class IrSuspendableExpressionImpl(startOffset: Int, endOffset: Int, type: KotlinType,
-                                  override var suspensionPointId: IrExpression, override var result: IrExpression)
-    : IrExpressionBase(startOffset, endOffset, type), IrSuspendableExpression {
+internal interface IrPrivateClassReference : IrClassReference {
+    val moduleDescriptor: ModuleDescriptor
+    val totalClasses: Int
+    val classIndex: Int
+    val dfgSymbol: DataFlowIR.Type.Declared
+}
 
+internal class IrPrivateClassReferenceImpl(startOffset: Int,
+                                           endOffset: Int,
+                                           type: IrType,
+                                           symbol: IrClassifierSymbol,
+                                           override val classType: IrType,
+                                           override val moduleDescriptor: ModuleDescriptor,
+                                           override val totalClasses: Int,
+                                           override val classIndex: Int,
+                                           override val dfgSymbol: DataFlowIR.Type.Declared
+) : IrPrivateClassReference,
+        IrTerminalDeclarationReferenceBase<IrClassifierSymbol, ClassifierDescriptor>(
+                startOffset, endOffset, type,
+                symbol, symbol.descriptor
+        )
+{
     override fun <R, D> accept(visitor: IrElementVisitor<R, D>, data: D): R =
-            visitor.visitExpression(this, data)
-
-    override fun <D> acceptChildren(visitor: IrElementVisitor<Unit, D>, data: D) {
-        suspensionPointId.accept(visitor, data)
-        result.accept(visitor, data)
-    }
-
-    override fun <D> transformChildren(transformer: IrElementTransformer<D>, data: D) {
-        suspensionPointId = suspensionPointId.transform(transformer, data)
-        result = result.transform(transformer, data)
-    }
+            visitor.visitClassReference(this, data)
 }

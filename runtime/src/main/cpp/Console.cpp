@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "Assert.h"
+#include "KAssert.h"
 #include "Memory.h"
 #include "Natives.h"
 #include "KString.h"
@@ -49,7 +49,7 @@ void Kotlin_io_Console_println0() {
 
 OBJ_GETTER0(Kotlin_io_Console_readLine) {
   char data[4096];
-  if (konan::consoleReadUtf8(data, sizeof(data)) == 0) {
+  if (konan::consoleReadUtf8(data, sizeof(data)) < 0) {
     RETURN_OBJ(nullptr);
   }
   RETURN_RESULT_OF(CreateStringFromCString, data);

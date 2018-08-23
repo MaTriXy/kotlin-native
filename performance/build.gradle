@@ -1,48 +1,51 @@
 buildscript {
-    def rootProperties = new Properties()
-    rootProperties.load(new FileReader(project.file('../gradle.properties')))
-    rootProperties.each {k, v -> ext.set(k, v)}
     repositories {
-
         maven {
-            //TODO: this path should be removed!!
-            url "https://oss.sonatype.org/content/repositories/snapshots"
+            url 'https://cache-redirector.jetbrains.com/maven-central'
         }
         maven {
-            url rootProperties.kotlinCompilerRepo
+            url buildKotlinCompilerRepo
         }
-        mavenCentral()
     }
 
     dependencies {
-        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinGradlePluginVersion"
-        classpath files(project.file('../tools/kotlin-native-gradle-plugin/build/libs').listFiles().findAll{it.name.endsWith('.jar')}.collect().first().absolutePath)
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$buildKotlinVersion"
+        classpath "org.jetbrains.kotlin:kotlin-native-gradle-plugin:$gradlePluginVersion"
     }
 }
 
 repositories {
     maven {
-        //TODO: this path should be removed!!
-        url "https://oss.sonatype.org/content/repositories/snapshots"
-    }
-    maven {
         url kotlinCompilerRepo
     }
-    mavenCentral()
+    maven {
+        url buildKotlinCompilerRepo
+    }
 }
 
 //TODO: property
-def ringWarmup=1000
-def iterations=2000
+def jvmWarmup = 10000
+def nativeWarmup = 10
+
+ext."konan.home" = distDir
 
 apply plugin: 'kotlin'
 apply plugin: 'application'
 apply plugin: 'konan'
 
+checkKonanCompiler.dependsOn ':dist'
+
 konanArtifacts {
     program('Ring') {
+        srcDir 'src/main/kotlin'
+        srcDir 'src/main/kotlin-native'
         enableOptimizations true
     }
+}
+
+sourceSets {
+    main.kotlin.srcDir 'src/main/kotlin'
+    main.kotlin.srcDir 'src/main/kotlin-jvm'
 }
 
 compileKotlin {
@@ -53,14 +56,15 @@ compileKotlin {
 }
 
 dependencies {
-    compile "org.jetbrains.kotlin:kotlin-stdlib-jre8:$kotlinStdLibJdk8Version"
+    compile "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$buildKotlinVersion"
 }
 
 task jvmRun(type: JavaExec) {
+    dependsOn 'build'
     def output = new ByteArrayOutputStream()
     classpath sourceSets.main.runtimeClasspath
     main = "MainKt"
-    args "$ringWarmup", "$iterations"
+    args "$jvmWarmup"
     standardOutput = output
     doLast {
         dumpReport('jvmReport', output)
@@ -74,8 +78,9 @@ private void dumpReport(String name, ByteArrayOutputStream output) {
 }
 
 task konanRun(type: Exec) {
+    dependsOn 'build'
     def output = new ByteArrayOutputStream()
-    commandLine konanArtifacts.Ring.getByTarget('host').artifact.absolutePath, "$ringWarmup", "$iterations"
+    commandLine konanArtifacts.Ring.getByTarget('host').artifact.absolutePath, "$nativeWarmup"
     standardOutput = output
     doLast {
         dumpReport('konanReport', output)
@@ -93,23 +98,50 @@ task bench(type:DefaultTask) {
     doLast {
         def jvmReport = new Report(project.file("build/jvmReport.txt"))
         def konanReport = new Report(project.file("build/konanReport.txt"))
-        jvmReport.report.each { k, v ->
-            def ratio = String.format('%.2f', konanReport.report[k]/v * 100)
-            println("$k : $ratio %")
+        def average = "none"
+        def absoluteAverage = "none"
+        jvmReport.report
+                .sort { konanReport.report[it.key].mean / it.value.mean }
+                .each { k, v ->
+            def konanValue = konanReport.report[k]
+            def ratio = konanValue.mean / v.mean
+            def minRatio = (konanValue.mean - konanValue.stdDev) / (v.mean + v.stdDev)
+            def maxRatio = (konanValue.mean + konanValue.stdDev) / (v.mean - v.stdDev)
+            def ratioStdDev = Math.min(Math.abs(minRatio - ratio), Math.abs(maxRatio - ratio))
+            def formattedKonanValue = String.format('%.4f us +- %.4f us', konanValue.mean / 1000, konanValue.stdDev / 1000)
+            def formattedRatio = String.format('%.2f +- %.2f', ratio, ratioStdDev)
+            if (k == 'RingAverage') {
+                average = formattedRatio
+                absoluteAverage = formattedKonanValue
+            } else {
+                println("$k : absolute = $formattedKonanValue, ratio = $formattedRatio")
+            }
             if (System.getenv("TEAMCITY_BUILD_PROPERTIES_FILE") != null)
                 println("##teamcity[buildStatisticValue key='$k' value='$ratio']")
         }
+
+        println()
+        println("Average Ring score: absolute = $absoluteAverage, ratio = $average")
     }
 }
 
+class Results {
+    def Double mean
+    def Double stdDev
+
+    Results(Double mean, Double stdDev) {
+        this.mean = mean
+        this.stdDev = stdDev
+    }
+}
 
 class Report {
-    def Map<String, Double> report = new HashMap()
+    def Map<String, Results> report = new TreeMap()
 
     Report(File path) {
-        path.readLines().drop(3).takeWhile { it.split(':').length == 2 }.each {
+        path.readLines().drop(3).findAll { it.split(':').length == 3 }.each {
             def p = it.split(':')
-            report.put(p[0].trim(), Double.parseDouble(p[1].trim()))
+            report.put(p[0].trim(), new Results(Double.parseDouble(p[1].trim()), Double.parseDouble(p[2].trim())))
         }
     }
 }

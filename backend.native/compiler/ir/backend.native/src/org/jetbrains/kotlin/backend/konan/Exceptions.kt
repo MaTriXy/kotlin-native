@@ -16,15 +16,7 @@
 
 package org.jetbrains.kotlin.backend.konan
 
-/**
- * This is a common ancestor of all Kotlin/Native exceptions.
- */
-open class KonanException(message: String = "", cause: Throwable? = null) : Exception(message, cause)
-
-/**
- * An error occured during external tool invocation. Such as non-zero exit code. 
- */
-class KonanExternalToolFailure(message: String = "", cause: Throwable? = null) : KonanException(message, cause)
+import org.jetbrains.kotlin.konan.KonanException
 
 /**
  * Represents a compilation error caused by mistakes in an input file, e.g. undefined reference.

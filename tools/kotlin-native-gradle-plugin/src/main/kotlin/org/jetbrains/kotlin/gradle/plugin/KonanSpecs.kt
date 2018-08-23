@@ -18,6 +18,7 @@ package org.jetbrains.kotlin.gradle.plugin
 
 import groovy.lang.Closure
 import org.gradle.api.Action
+import org.gradle.api.Project
 import org.gradle.api.file.FileCollection
 
 interface KonanArtifactSpec {
@@ -30,6 +31,7 @@ interface KonanArtifactWithLibrariesSpec: KonanArtifactSpec {
     fun libraries(configure: KonanLibrariesSpec.() -> Unit)
 
     fun noDefaultLibs(flag: Boolean)
+    fun dependencies(closure: Closure<Unit>)
 }
 
 interface KonanBuildingSpec: KonanArtifactWithLibrariesSpec {
@@ -50,6 +52,14 @@ interface KonanCompileSpec: KonanBuildingSpec {
     fun nativeLibrary(lib: Any)
     fun nativeLibraries(vararg libs: Any)
     fun nativeLibraries(libs: FileCollection)
+
+    // DSL. Multiplatform projects
+    fun enableMultiplatform(flag: Boolean)
+
+    // TODO: Get rid of commonSourceSet in 0.7
+    @Deprecated("Use commonSourceSets instead", ReplaceWith("commonSourceSets(sourceSetName)"))
+    fun commonSourceSet(sourceSetName: String)
+    fun commonSourceSets(vararg sourceSetNames: String)
 
     // DSL. Other parameters.
 

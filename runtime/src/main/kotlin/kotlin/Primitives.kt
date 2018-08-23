@@ -16,13 +16,13 @@
 
 package kotlin
 
-import konan.internal.NumberConverter
+import kotlin.native.internal.NumberConverter
 
 /**
  * Represents a 8-bit signed integer.
  * On the JVM, non-nullable values of this type are represented as values of the primitive type `byte`.
  */
-public final class Byte : Number(), Comparable<Byte> {
+public final class Byte private constructor(private val value: kotlin.native.internal.ByteValue) : Number(), Comparable<Byte> {
     companion object {
         /**
          * A constant holding the minimum value an instance of Byte can have.
@@ -33,6 +33,18 @@ public final class Byte : Number(), Comparable<Byte> {
          * A constant holding the maximum value an instance of Byte can have.
          */
         public const val MAX_VALUE: Byte = 127
+
+        /**
+         * The number of bytes used to represent an instance of Byte in a binary form.
+         */
+        @SinceKotlin("1.3")
+        public const val SIZE_BYTES: Int = 1
+
+        /**
+         * The number of bits used to represent an instance of Byte in a binary form.
+         */
+        @SinceKotlin("1.3")
+        public const val SIZE_BITS: Int = 8
     }
 
     /**
@@ -186,19 +198,6 @@ public final class Byte : Number(), Comparable<Byte> {
     @SymbolName("Kotlin_Byte_unaryMinus")
     external public operator fun unaryMinus(): Int
 
-    /** Performs a bitwise AND operation between the two values. */
-    @SymbolName("Kotlin_Byte_and_Byte")
-    external public infix fun and(other: Byte): Byte
-    /** Performs a bitwise OR operation between the two values. */
-    @SymbolName("Kotlin_Byte_or_Byte")
-    external public infix fun or(other: Byte): Byte
-    /** Performs a bitwise XOR operation between the two values. */
-    @SymbolName("Kotlin_Byte_xor_Byte")
-    external public infix fun xor(other: Byte): Byte
-    /** Inverts the bits in this value/ */
-    @SymbolName("Kotlin_Byte_inv")
-    external public fun inv(): Byte
-
     @SymbolName("Kotlin_Byte_toByte")
     external public override fun toByte(): Byte
     @SymbolName("Kotlin_Byte_toChar")
@@ -232,10 +231,10 @@ public final class Byte : Number(), Comparable<Byte> {
     }
 
     // Konan-specific.
-    public fun equals(other: Byte): Boolean = konan.internal.areEqualByValue(this, other)
+    public fun equals(other: Byte): Boolean = kotlin.native.internal.areEqualByValue(this, other)
 
     public override fun equals(other: Any?): Boolean =
-            other is Byte && konan.internal.areEqualByValue(this, other)
+            other is Byte && kotlin.native.internal.areEqualByValue(this, other)
 
     @SymbolName("Kotlin_Byte_toString")
     external public override fun toString(): String
@@ -249,7 +248,7 @@ public final class Byte : Number(), Comparable<Byte> {
  * Represents a 16-bit signed integer.
  * On the JVM, non-nullable values of this type are represented as values of the primitive type `short`.
  */
-public final class Short : Number(), Comparable<Short> {
+public final class Short private constructor(private val value: kotlin.native.internal.ShortValue) : Number(), Comparable<Short> {
     companion object {
         /**
          * A constant holding the minimum value an instance of Short can have.
@@ -260,6 +259,18 @@ public final class Short : Number(), Comparable<Short> {
          * A constant holding the maximum value an instance of Short can have.
          */
         public const val MAX_VALUE: Short = 32767
+
+        /**
+         * The number of bytes used to represent an instance of Short in a binary form.
+         */
+        @SinceKotlin("1.3")
+        public const val SIZE_BYTES: Int = 2
+
+        /**
+         * The number of bits used to represent an instance of Short in a binary form.
+         */
+        @SinceKotlin("1.3")
+        public const val SIZE_BITS: Int = 16
     }
 
     /**
@@ -413,19 +424,6 @@ public final class Short : Number(), Comparable<Short> {
     @SymbolName("Kotlin_Short_unaryMinus")
     external public operator fun unaryMinus(): Int
 
-    /** Performs a bitwise AND operation between the two values. */
-    @SymbolName("Kotlin_Short_and_Short")
-    external public infix fun and(other: Short): Short
-    /** Performs a bitwise OR operation between the two values. */
-    @SymbolName("Kotlin_Short_or_Short")
-    external public infix fun or(other: Short): Short
-    /** Performs a bitwise XOR operation between the two values. */
-    @SymbolName("Kotlin_Short_xor_Short")
-    external public infix fun xor(other: Short): Short
-    /** Inverts the bits in this value/ */
-    @SymbolName("Kotlin_Short_inv")
-    external public fun inv(): Short
-
     /** Creates a range from this value to the specified [other] value. */
     public operator fun rangeTo(other: Byte): IntRange {
         return IntRange(this.toInt(), other.toInt())
@@ -459,10 +457,10 @@ public final class Short : Number(), Comparable<Short> {
     external public override fun toDouble(): Double
 
     // Konan-specific.
-    public fun equals(other: Short): Boolean = konan.internal.areEqualByValue(this, other)
+    public fun equals(other: Short): Boolean = kotlin.native.internal.areEqualByValue(this, other)
 
     public override fun equals(other: Any?): Boolean =
-        other is Short && konan.internal.areEqualByValue(this, other)
+        other is Short && kotlin.native.internal.areEqualByValue(this, other)
 
     @SymbolName("Kotlin_Short_toString")
     external public override fun toString(): String
@@ -476,7 +474,7 @@ public final class Short : Number(), Comparable<Short> {
  * Represents a 32-bit signed integer.
  * On the JVM, non-nullable values of this type are represented as values of the primitive type `int`.
  */
-public final class Int : Number(), Comparable<Int> {
+public final class Int private constructor(private val value: kotlin.native.internal.IntValue) : Number(), Comparable<Int> {
     companion object {
         /**
          * A constant holding the minimum value an instance of Int can have.
@@ -487,6 +485,18 @@ public final class Int : Number(), Comparable<Int> {
          * A constant holding the maximum value an instance of Int can have.
          */
         public const val MAX_VALUE: Int = 2147483647
+
+        /**
+         * The number of bytes used to represent an instance of Int in a binary form.
+         */
+        @SinceKotlin("1.3")
+        public const val SIZE_BYTES: Int = 4
+
+        /**
+         * The number of bits used to represent an instance of Int in a binary form.
+         */
+        @SinceKotlin("1.3")
+        public const val SIZE_BITS: Int = 32
     }
 
     /**
@@ -695,10 +705,10 @@ public final class Int : Number(), Comparable<Int> {
     external public override fun toDouble(): Double
 
     // Konan-specific.
-    public fun equals(other: Int): Boolean = konan.internal.areEqualByValue(this, other)
+    public fun equals(other: Int): Boolean = kotlin.native.internal.areEqualByValue(this, other)
 
     public override fun equals(other: Any?): Boolean =
-         other is Int && konan.internal.areEqualByValue(this, other)
+         other is Int && kotlin.native.internal.areEqualByValue(this, other)
 
     @SymbolName("Kotlin_Int_toString")
     external public override fun toString(): String
@@ -712,7 +722,7 @@ public final class Int : Number(), Comparable<Int> {
  * Represents a 64-bit signed integer.
  * On the JVM, non-nullable values of this type are represented as values of the primitive type `long`.
  */
-public final class Long : Number(), Comparable<Long> {
+public final class Long private constructor(private val value: kotlin.native.internal.LongValue) : Number(), Comparable<Long> {
     companion object {
         /**
          * A constant holding the minimum value an instance of Long can have.
@@ -723,6 +733,18 @@ public final class Long : Number(), Comparable<Long> {
          * A constant holding the maximum value an instance of Long can have.
          */
         public const val MAX_VALUE: Long = 9223372036854775807L
+
+        /**
+         * The number of bytes used to represent an instance of Long in a binary form.
+         */
+        @SinceKotlin("1.3")
+        public const val SIZE_BYTES: Int = 8
+
+        /**
+         * The number of bits used to represent an instance of Long in a binary form.
+         */
+        @SinceKotlin("1.3")
+        public const val SIZE_BITS: Int = 64
     }
 
     /**
@@ -931,10 +953,10 @@ public final class Long : Number(), Comparable<Long> {
     external public override fun toDouble(): Double
 
     // Konan-specific.
-    public fun equals(other: Long): Boolean = konan.internal.areEqualByValue(this, other)
+    public fun equals(other: Long): Boolean = kotlin.native.internal.areEqualByValue(this, other)
 
     public override fun equals(other: Any?): Boolean =
-            other is Long && konan.internal.areEqualByValue(this, other)
+            other is Long && kotlin.native.internal.areEqualByValue(this, other)
 
     @SymbolName("Kotlin_Long_toString")
     external public override fun toString(): String
@@ -948,7 +970,7 @@ public final class Long : Number(), Comparable<Long> {
  * Represents a single-precision 32-bit IEEE 754 floating point number.
  * On the JVM, non-nullable values of this type are represented as values of the primitive type `float`.
  */
-public final class Float : Number(), Comparable<Float> {
+public final class Float private constructor(private val value: kotlin.native.internal.FloatValue) : Number(), Comparable<Float> {
     companion object {
         /**
          * A constant holding the smallest *positive* nonzero value of Float.
@@ -975,8 +997,7 @@ public final class Float : Number(), Comparable<Float> {
         /**
          * A constant holding the "not a number" value of Float.
          */
-        @Suppress("DIVISION_BY_ZERO")
-        public val NaN: Float = 0.0f / 0.0f
+        public val NaN: Float = kotlinx.cinterop.bitsToFloat(0x7fc00000)
     }
 
     /**
@@ -984,43 +1005,48 @@ public final class Float : Number(), Comparable<Float> {
      * Returns zero if this value is equal to the specified other value, a negative number if its less than other,
      * or a positive number if its greater than other.
      */
-    @SymbolName("Kotlin_Float_compareTo_Byte")
-    external public operator fun compareTo(other: Byte): Int
+    public operator fun compareTo(other: Byte): Int = compareTo(other.toFloat())
     /**
      * Compares this value with the specified value for order.
      * Returns zero if this value is equal to the specified other value, a negative number if its less than other,
      * or a positive number if its greater than other.
      */
-    @SymbolName("Kotlin_Float_compareTo_Short")
-    external public operator fun compareTo(other: Short): Int
+    public operator fun compareTo(other: Short): Int = compareTo(other.toFloat())
     /**
      * Compares this value with the specified value for order.
      * Returns zero if this value is equal to the specified other value, a negative number if its less than other,
      * or a positive number if its greater than other.
      */
-    @SymbolName("Kotlin_Float_compareTo_Int")
-    external public operator fun compareTo(other: Int): Int
+    public operator fun compareTo(other: Int): Int = compareTo(other.toFloat())
     /**
      * Compares this value with the specified value for order.
      * Returns zero if this value is equal to the specified other value, a negative number if its less than other,
      * or a positive number if its greater than other.
      */
-    @SymbolName("Kotlin_Float_compareTo_Long")
-    external public operator fun compareTo(other: Long): Int
+    public operator fun compareTo(other: Long): Int = compareTo(other.toFloat())
     /**
      * Compares this value with the specified value for order.
      * Returns zero if this value is equal to the specified other value, a negative number if its less than other,
      * or a positive number if its greater than other.
      */
-    @SymbolName("Kotlin_Float_compareTo_Float")
-    external public override operator fun compareTo(other: Float): Int
+    public override operator fun compareTo(other: Float): Int {
+        // if any of values in NaN both comparisons return false
+        if (this > other) return 1
+        if (this < other) return -1
+
+        val thisBits = this.toBits()
+        val otherBits = other.toBits()
+
+        // Canonical NaN bits representation higher than any other bit representvalue
+        return thisBits.compareTo(otherBits)
+    }
+
     /**
      * Compares this value with the specified value for order.
      * Returns zero if this value is equal to the specified other value, a negative number if its less than other,
      * or a positive number if its greater than other.
      */
-    @SymbolName("Kotlin_Float_compareTo_Double")
-    external public operator fun compareTo(other: Double): Int
+    public operator fun compareTo(other: Double): Int = - other.compareTo(this)
 
     /** Adds the other value to this value. */
     @SymbolName("Kotlin_Float_plus_Byte")
@@ -1130,11 +1156,12 @@ public final class Float : Number(), Comparable<Float> {
     @SymbolName("Kotlin_Float_unaryMinus")
     external public operator fun unaryMinus(): Float
 
-    @SymbolName("Kotlin_Float_toByte")
-    external public override fun toByte(): Byte
+    public override fun toByte(): Byte = this.toInt().toByte()
+
     public override fun toChar(): Char = this.toInt().toChar()
-    @SymbolName("Kotlin_Float_toShort")
-    external public override fun toShort(): Short
+
+    public override fun toShort(): Short = this.toInt().toShort()
+
     @SymbolName("Kotlin_Float_toInt")
     external public override fun toInt(): Int
     @SymbolName("Kotlin_Float_toLong")
@@ -1144,14 +1171,9 @@ public final class Float : Number(), Comparable<Float> {
     @SymbolName("Kotlin_Float_toDouble")
     external public override fun toDouble(): Double
 
-    // Konan-specific.
-    // We intentionally provide this overload to equals() to avoid artifical boxing.
-    // Note that here we intentionally deviate from JVM Kotlin, where this method would be
-    // this.bits() == other.bits().
-    public fun equals(other: Float): Boolean = konan.internal.areEqualByValue(this, other)
+    public fun equals(other: Float): Boolean = toBits() == other.toBits()
 
-    public override fun equals(other: Any?): Boolean =
-            other is Float && konan.internal.areEqualByValue(this, other)
+    public override fun equals(other: Any?): Boolean = other is Float && this.equals(other)
 
     public override fun toString() = NumberConverter.convert(this)
 
@@ -1167,7 +1189,7 @@ public final class Float : Number(), Comparable<Float> {
  * Represents a double-precision 64-bit IEEE 754 floating point number.
  * On the JVM, non-nullable values of this type are represented as values of the primitive type `double`.
  */
-public final class Double : Number(), Comparable<Double> {
+public final class Double private constructor(private val value: kotlin.native.internal.DoubleValue) : Number(), Comparable<Double> {
     companion object {
         /**
          * A constant holding the smallest *positive* nonzero value of Double.
@@ -1194,8 +1216,7 @@ public final class Double : Number(), Comparable<Double> {
         /**
          * A constant holding the "not a number" value of Double.
          */
-        @Suppress("DIVISION_BY_ZERO")
-        public val NaN: Double = 0.0 / 0.0
+        public val NaN: Double = kotlinx.cinterop.bitsToDouble(0x7ff8000000000000L)
     }
 
     /**
@@ -1203,43 +1224,52 @@ public final class Double : Number(), Comparable<Double> {
      * Returns zero if this value is equal to the specified other value, a negative number if its less than other,
      * or a positive number if its greater than other.
      */
-    @SymbolName("Kotlin_Double_compareTo_Byte")
-    external public operator fun compareTo(other: Byte): Int
+    public operator fun compareTo(other: Byte): Int = compareTo(other.toDouble())
+
     /**
      * Compares this value with the specified value for order.
      * Returns zero if this value is equal to the specified other value, a negative number if its less than other,
      * or a positive number if its greater than other.
      */
-    @SymbolName("Kotlin_Double_compareTo_Short")
-    external public operator fun compareTo(other: Short): Int
+    public operator fun compareTo(other: Short): Int = compareTo(other.toDouble())
+
     /**
      * Compares this value with the specified value for order.
      * Returns zero if this value is equal to the specified other value, a negative number if its less than other,
      * or a positive number if its greater than other.
      */
-    @SymbolName("Kotlin_Double_compareTo_Int")
-    external public operator fun compareTo(other: Int): Int
+    public operator fun compareTo(other: Int): Int = compareTo(other.toDouble())
+
     /**
      * Compares this value with the specified value for order.
      * Returns zero if this value is equal to the specified other value, a negative number if its less than other,
      * or a positive number if its greater than other.
      */
-    @SymbolName("Kotlin_Double_compareTo_Long")
-    external public operator fun compareTo(other: Long): Int
+    public operator fun compareTo(other: Long): Int = compareTo(other.toDouble())
+
     /**
      * Compares this value with the specified value for order.
      * Returns zero if this value is equal to the specified other value, a negative number if its less than other,
      * or a positive number if its greater than other.
      */
-    @SymbolName("Kotlin_Double_compareTo_Float")
-    external public operator fun compareTo(other: Float): Int
+    public operator fun compareTo(other: Float): Int = compareTo(other.toDouble())
+
     /**
      * Compares this value with the specified value for order.
      * Returns zero if this value is equal to the specified other value, a negative number if its less than other,
      * or a positive number if its greater than other.
      */
-    @SymbolName("Kotlin_Double_compareTo_Double")
-    external public override operator fun compareTo(other: Double): Int
+    public override operator fun compareTo(other: Double): Int {
+        // if any of values in NaN both comparisons return false
+        if (this > other) return 1
+        if (this < other) return -1
+
+        val thisBits = this.toBits()
+        val otherBits = other.toBits()
+
+        // Canonical NaN bits representation higher than any other bit representvalue
+        return thisBits.compareTo(otherBits)
+    }
 
     /** Adds the other value to this value. */
     @SymbolName("Kotlin_Double_plus_Byte")
@@ -1349,12 +1379,12 @@ public final class Double : Number(), Comparable<Double> {
     @SymbolName("Kotlin_Double_unaryMinus")
     external public operator fun unaryMinus(): Double
 
+    public override fun toByte(): Byte = this.toInt().toByte()
 
-    @SymbolName("Kotlin_Double_toByte")
-    external public override fun toByte(): Byte
     public override fun toChar(): Char = this.toInt().toChar()
-    @SymbolName("Kotlin_Double_toShort")
-    external public override fun toShort(): Short
+
+    public override fun toShort(): Short = this.toInt().toShort()
+
     @SymbolName("Kotlin_Double_toInt")
     external public override fun toInt(): Int
     @SymbolName("Kotlin_Double_toLong")
@@ -1364,19 +1394,13 @@ public final class Double : Number(), Comparable<Double> {
     @SymbolName("Kotlin_Double_toDouble")
     external public override fun toDouble(): Double
 
-    // Konan-specific.
-    // Note that here we intentionally deviate from JVM Kotlin, where this method would be
-    // this.bits() == other.bits().
-    public fun equals(other: Double): Boolean = konan.internal.areEqualByValue(this, other)
+    public fun equals(other: Double): Boolean = toBits() == other.toBits()
 
-    public override fun equals(other: Any?): Boolean =
-            other is Double && konan.internal.areEqualByValue(this, other)
+    public override fun equals(other: Any?): Boolean = other is Double && this.equals(other)
 
     public override fun toString() = NumberConverter.convert(this)
 
-    public override fun hashCode(): Int {
-        return bits().hashCode()
-    }
+    public override fun hashCode(): Int = bits().hashCode()
 
     @SymbolName("Kotlin_Double_bits")
     external public fun bits(): Long

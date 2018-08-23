@@ -25,21 +25,18 @@
 #if WITH_WORKERS
 #include <pthread.h>
 #include <sys/time.h>
-
-#include <deque>
-#include <unordered_map>
 #endif
 
 #include "Alloc.h"
-#include "Assert.h"
+#include "KAssert.h"
 #include "Memory.h"
 #include "Runtime.h"
 #include "Types.h"
 
 extern "C" {
 
-void ThrowWorkerInvalidState();
-void ThrowWorkerUnsupported();
+RUNTIME_NORETURN void ThrowWorkerInvalidState();
+RUNTIME_NORETURN void ThrowWorkerUnsupported();
 OBJ_GETTER(WorkerLaunchpad, KRef);
 
 }  // extern "C"
@@ -460,6 +457,19 @@ KInt versionToken() {
   return theState()->versionToken();
 }
 
+OBJ_GETTER(attachObjectGraphInternal, KNativePtr stable) {
+  RETURN_RESULT_OF(AdoptStablePointer, stable);
+}
+
+KNativePtr detachObjectGraphInternal(KInt transferMode, KRef producer) {
+   KRef ref = nullptr;
+   WorkerLaunchpad(producer, &ref);
+   if (ref != nullptr) {
+     return transfer(ref, transferMode);
+   } else
+     return nullptr;
+}
+
 #else
 
 KInt startWorker() {
@@ -502,6 +512,16 @@ KInt versionToken() {
   return 0;
 }
 
+OBJ_GETTER(attachObjectGraphInternal, KNativePtr stable) {
+  ThrowWorkerUnsupported();
+  return nullptr;
+}
+
+KNativePtr detachObjectGraphInternal(KInt transferMode, KRef producer) {
+   ThrowWorkerUnsupported();
+   return nullptr;
+}
+
 #endif  // WITH_WORKERS
 
 }  // namespace
@@ -540,5 +560,25 @@ KInt Kotlin_Worker_versionToken() {
   return versionToken();
 }
 
+OBJ_GETTER(Kotlin_Worker_attachObjectGraphInternal, KNativePtr stable) {
+  RETURN_RESULT_OF(attachObjectGraphInternal, stable);
+}
+
+KNativePtr Kotlin_Worker_detachObjectGraphInternal(KInt transferMode, KRef producer) {
+  return detachObjectGraphInternal(transferMode, producer);
+}
+
+void Kotlin_Worker_freezeInternal(KRef object) {
+  if (object != nullptr)
+    FreezeSubgraph(object);
+}
+
+KBoolean Kotlin_Worker_isFrozenInternal(KRef object) {
+  return object == nullptr || object->container()->permanentOrFrozen();
+}
+
+void Kotlin_Worker_ensureNeverFrozen(KRef object) {
+  EnsureNeverFrozen(object);
+}
 
 }  // extern "C"

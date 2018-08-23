@@ -23,6 +23,11 @@ import org.gradle.api.tasks.*
 import org.gradle.util.ConfigureUtil
 import org.jetbrains.kotlin.gradle.plugin.*
 import org.jetbrains.kotlin.gradle.plugin.KonanInteropSpec.IncludeDirectoriesSpec
+import org.jetbrains.kotlin.gradle.plugin.model.KonanModelArtifact
+import org.jetbrains.kotlin.gradle.plugin.model.KonanModelArtifactImpl
+import org.jetbrains.kotlin.konan.library.defaultResolver
+import org.jetbrains.kotlin.konan.target.CompilerOutputKind
+import org.jetbrains.kotlin.konan.target.Distribution
 import org.jetbrains.kotlin.konan.target.KonanTarget
 import java.io.File
 
@@ -31,10 +36,10 @@ import java.io.File
  */
 open class KonanInteropTask: KonanBuildingTask(), KonanInteropSpec {
 
-    @Internal override val toolRunner: KonanToolRunner = KonanInteropRunner(project)
+    @Internal override val toolRunner: KonanToolRunner = KonanInteropRunner(project, project.konanExtension.jvmArgs)
 
-    override fun init(destinationDir: File, artifactName: String, target: KonanTarget) {
-        super.init(destinationDir, artifactName, target)
+    override fun init(config: KonanBuildingConfig<*>, destinationDir: File, artifactName: String, target: KonanTarget) {
+        super.init(config, destinationDir, artifactName, target)
         this.defFile = project.konanDefaultDefFile(artifactName)
     }
 
@@ -42,6 +47,9 @@ open class KonanInteropTask: KonanBuildingTask(), KonanInteropSpec {
 
     override val artifactSuffix: String
         @Internal get() = ".klib"
+
+    override val artifactPrefix: String
+        @Internal get() = ""
 
     // Interop stub generator parameters -------------------------------------
 
@@ -58,11 +66,9 @@ open class KonanInteropTask: KonanBuildingTask(), KonanInteropSpec {
     @InputFiles val linkFiles = mutableSetOf<FileCollection>()
 
     override fun buildArgs() = mutableListOf<String>().apply {
-        addArg("-properties", "${project.konanHome}/konan/konan.properties")
-
         addArg("-o", artifact.canonicalPath)
 
-        addArgIfNotNull("-target", konanTarget.userName)
+        addArgIfNotNull("-target", konanTarget.visibleName)
         addArgIfNotNull("-def", defFile.canonicalPath)
         addArgIfNotNull("-pkg", packageName)
 
@@ -149,6 +155,29 @@ open class KonanInteropTask: KonanBuildingTask(), KonanInteropSpec {
         linkFiles.add(files)
     }
 
+    // endregion
+
+    // region IDE model
+    override fun toModelArtifact(): KonanModelArtifact {
+        val repos = libraries.repos
+        val resolver = defaultResolver(
+                repos.map { it.absolutePath },
+                konanTarget,
+                Distribution(konanHomeOverride = project.konanHome)
+        )
+
+        return KonanModelArtifactImpl(
+                artifactName,
+                artifact,
+                CompilerOutputKind.LIBRARY,
+                konanTarget.name,
+                name,
+                listOfNotNull(defFile.parentFile),
+                listOf(defFile),
+                libraries.asFiles(resolver),
+                repos.toList()
+        )
+    }
     // endregion
 }
 

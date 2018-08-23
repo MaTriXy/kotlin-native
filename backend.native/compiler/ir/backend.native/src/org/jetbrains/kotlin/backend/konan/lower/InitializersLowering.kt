@@ -19,22 +19,17 @@ package org.jetbrains.kotlin.backend.konan.lower
 import org.jetbrains.kotlin.backend.common.ClassLoweringPass
 import org.jetbrains.kotlin.backend.common.CommonBackendContext
 import org.jetbrains.kotlin.backend.konan.descriptors.synthesizedName
-import org.jetbrains.kotlin.descriptors.CallableMemberDescriptor
-import org.jetbrains.kotlin.descriptors.Modality
-import org.jetbrains.kotlin.descriptors.SourceElement
-import org.jetbrains.kotlin.descriptors.Visibilities
+import org.jetbrains.kotlin.descriptors.*
 import org.jetbrains.kotlin.descriptors.annotations.Annotations
 import org.jetbrains.kotlin.descriptors.impl.SimpleFunctionDescriptorImpl
 import org.jetbrains.kotlin.ir.IrStatement
 import org.jetbrains.kotlin.ir.declarations.*
 import org.jetbrains.kotlin.ir.declarations.impl.IrFunctionImpl
-import org.jetbrains.kotlin.ir.expressions.IrBlockBody
-import org.jetbrains.kotlin.ir.expressions.IrDelegatingConstructorCall
-import org.jetbrains.kotlin.ir.expressions.IrInstanceInitializerCall
-import org.jetbrains.kotlin.ir.expressions.IrStatementOriginImpl
+import org.jetbrains.kotlin.ir.expressions.*
 import org.jetbrains.kotlin.ir.expressions.impl.*
 import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
-import org.jetbrains.kotlin.ir.util.createParameterDeclarations
+import org.jetbrains.kotlin.ir.util.addChild
+import org.jetbrains.kotlin.ir.util.createDispatchReceiverParameter
 import org.jetbrains.kotlin.ir.util.transformFlat
 import org.jetbrains.kotlin.ir.visitors.IrElementTransformerVoid
 import org.jetbrains.kotlin.ir.visitors.transformChildrenVoid
@@ -69,7 +64,7 @@ internal class InitializersLowering(val context: CommonBackendContext) : ClassLo
 
                 override fun visitAnonymousInitializer(declaration: IrAnonymousInitializer): IrStatement {
                     initializers.add(IrBlockImpl(declaration.startOffset, declaration.endOffset,
-                            context.builtIns.unitType, STATEMENT_ORIGIN_ANONYMOUS_INITIALIZER, declaration.body.statements))
+                            context.irBuiltIns.unitType, STATEMENT_ORIGIN_ANONYMOUS_INITIALIZER, declaration.body.statements))
                     return declaration
                 }
 
@@ -77,11 +72,16 @@ internal class InitializersLowering(val context: CommonBackendContext) : ClassLo
                     val initializer = declaration.initializer ?: return declaration
                     val startOffset = initializer.startOffset
                     val endOffset = initializer.endOffset
-                    initializers.add(IrBlockImpl(startOffset, endOffset, context.builtIns.unitType, STATEMENT_ORIGIN_ANONYMOUS_INITIALIZER,
+                    initializers.add(IrBlockImpl(startOffset, endOffset, context.irBuiltIns.unitType, STATEMENT_ORIGIN_ANONYMOUS_INITIALIZER,
                             listOf(
                                     IrSetFieldImpl(startOffset, endOffset, declaration.symbol,
-                                            IrGetValueImpl(startOffset, endOffset, irClass.thisReceiver!!.symbol),
-                                            initializer.expression, STATEMENT_ORIGIN_ANONYMOUS_INITIALIZER))))
+                                            IrGetValueImpl(
+                                                    startOffset, endOffset,
+                                                    irClass.thisReceiver!!.type, irClass.thisReceiver!!.symbol
+                                            ),
+                                            initializer.expression,
+                                            context.irBuiltIns.unitType,
+                                            STATEMENT_ORIGIN_ANONYMOUS_INITIALIZER))))
                     declaration.initializer = null
                     return declaration
                 }
@@ -114,9 +114,30 @@ internal class InitializersLowering(val context: CommonBackendContext) : ClassLo
             val startOffset = irClass.startOffset
             val endOffset = irClass.endOffset
             val initializer = IrFunctionImpl(startOffset, endOffset, DECLARATION_ORIGIN_ANONYMOUS_INITIALIZER,
-                    initializerMethodDescriptor, IrBlockBodyImpl(startOffset, endOffset, initializers))
+                    initializerMethodDescriptor)
 
-            initializer.createParameterDeclarations()
+            initializer.returnType = context.irBuiltIns.unitType
+            initializer.body = IrBlockBodyImpl(startOffset, endOffset, initializers)
+
+            initializer.parent = irClass
+            initializer.createDispatchReceiverParameter()
+
+            initializers.forEach {
+                it.transformChildrenVoid(object : IrElementTransformerVoid() {
+                    override fun visitGetValue(expression: IrGetValue): IrExpression {
+                        if (expression.symbol == irClass.thisReceiver!!.symbol) {
+                            return IrGetValueImpl(
+                                    expression.startOffset,
+                                    expression.endOffset,
+                                    initializer.dispatchReceiverParameter!!.type,
+                                    initializer.dispatchReceiverParameter!!.symbol
+                            )
+                        } else {
+                            return expression
+                        }
+                    }
+                })
+            }
 
             irClass.declarations.add(initializer)
 
@@ -124,6 +145,8 @@ internal class InitializersLowering(val context: CommonBackendContext) : ClassLo
         }
 
         private fun lowerConstructors(initializerMethodSymbol: IrSimpleFunctionSymbol?) {
+            if (irClass.kind == ClassKind.ANNOTATION_CLASS)
+                return
             irClass.transformChildrenVoid(object : IrElementTransformerVoid() {
 
                 override fun visitClass(declaration: IrClass): IrStatement {
@@ -132,7 +155,8 @@ internal class InitializersLowering(val context: CommonBackendContext) : ClassLo
                 }
 
                 override fun visitConstructor(declaration: IrConstructor): IrStatement {
-                    val blockBody = declaration.body as? IrBlockBody ?: throw AssertionError("Unexpected constructor body: ${declaration.body}")
+                    val blockBody = declaration.body as? IrBlockBody
+                            ?: throw AssertionError("Unexpected constructor body: ${declaration.body}")
 
                     blockBody.statements.transformFlat {
                         when {
@@ -143,8 +167,13 @@ internal class InitializersLowering(val context: CommonBackendContext) : ClassLo
                                 } else {
                                     val startOffset = it.startOffset
                                     val endOffset = it.endOffset
-                                    listOf(IrCallImpl(startOffset, endOffset, initializerMethodSymbol).apply {
-                                        dispatchReceiver = IrGetValueImpl(startOffset, endOffset, irClass.thisReceiver!!.symbol)
+                                    listOf(IrCallImpl(startOffset, endOffset,
+                                            context.irBuiltIns.unitType, initializerMethodSymbol
+                                    ).apply {
+                                        dispatchReceiver = IrGetValueImpl(
+                                                startOffset, endOffset,
+                                                irClass.thisReceiver!!.type, irClass.thisReceiver!!.symbol
+                                        )
                                     })
                                 }
                             }

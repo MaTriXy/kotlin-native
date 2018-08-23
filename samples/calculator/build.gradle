@@ -1,25 +1,11 @@
-buildscript {
-    ext.kotlin_version = '1.2.0'
-
-    dependencies {
-        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+task build {
+    subprojects.each {
+        dependsOn("${it.path}:build")
     }
 }
 
-apply plugin: 'kotlin'
-
-repositories {
-    mavenCentral()
-}
-
-dependencies {
-    compile "org.jetbrains.kotlin:kotlin-stdlib"
-}
-
-apply plugin: 'konan'
-
-konan.targets = ['iphone']
-
-konanArtifacts {
-    framework('KotlinArithmeticParser')
+task clean {
+    subprojects.each {
+        dependsOn("${it.path}:clean")
+    }
 }

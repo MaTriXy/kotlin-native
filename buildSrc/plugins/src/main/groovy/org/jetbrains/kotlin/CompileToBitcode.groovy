@@ -112,11 +112,10 @@ class CompileCppToBitcode extends DefaultTask {
             workingDir objDir
             executable "clang++"
             args '-std=c++11'
-
+            args '-O2'
             args compilerArgs
 
             args "-I$headersDir"
-
             args '-c', '-emit-llvm'
             args project.fileTree(srcDir) {
                 include('**/*.cpp')

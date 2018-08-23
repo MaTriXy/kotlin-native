@@ -52,7 +52,7 @@ internal fun findMainEntryPoint(context: Context): FunctionDescriptor? {
             it.returnType?.isUnit() == true &&
             it.hasSingleArrayOfStringParameter &&
             it.typeParameters.isEmpty() &&
-            it.isExported()
+            it.visibility.isPublicAPI
         }
     if (main == null) {
         context.reportCompilationError("Could not find '$entryName' in '$packageName' package.")
@@ -61,7 +61,7 @@ internal fun findMainEntryPoint(context: Context): FunctionDescriptor? {
 }
 
 private val defaultEntryName = "main"
-private val testEntryName = "konan.test.main"
+private val testEntryName = "kotlin.native.test.main"
 
 private val defaultEntryPackage = FqName.ROOT
 

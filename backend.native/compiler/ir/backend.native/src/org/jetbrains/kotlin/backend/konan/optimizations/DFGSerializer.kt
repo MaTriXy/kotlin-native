@@ -1,8 +1,29 @@
+/*
+ * Copyright 2010-2017 JetBrains s.r.o.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package org.jetbrains.kotlin.backend.konan.optimizations
 
 import org.jetbrains.kotlin.backend.konan.Context
+import org.jetbrains.kotlin.backend.konan.PrimitiveBinaryType
 import org.jetbrains.kotlin.config.CommonConfigurationKeys
+import org.jetbrains.kotlin.serialization.konan.DefaultKonanModuleDescriptorFactory
 import sun.misc.Unsafe
+import kotlin.reflect.KClass
+import kotlin.reflect.full.memberProperties
+import kotlin.reflect.jvm.jvmName
 
 internal class ExternalModulesDFG(val allTypes: List<DataFlowIR.Type.Declared>,
                                   val publicTypes: Map<Long, DataFlowIR.Type.Public>,
@@ -18,8 +39,6 @@ private val byteArrayDataOffset = theUnsafe.arrayBaseOffset(ByteArray::class.jav
 private val intArrayDataOffset  = theUnsafe.arrayBaseOffset(IntArray::class.java).toLong()
 private val charArrayDataOffset = theUnsafe.arrayBaseOffset(CharArray::class.java).toLong()
 private val stringValueOffset   = theUnsafe.objectFieldOffset(String::class.java.getDeclaredField("value"))
-
-private val VERSION = 1
 
 internal object DFGSerializer {
 
@@ -39,8 +58,6 @@ internal object DFGSerializer {
             index += 4
         }
 
-        fun writeNullableInt(value: Int?) = writeNullable(value) { this.writeInt(it) }
-
         fun writeLong(value: Long) {
             ensureSize(8)
             theUnsafe.putLong(array, byteArrayDataOffset + index, value)
@@ -52,6 +69,21 @@ internal object DFGSerializer {
             theUnsafe.putBoolean(array, byteArrayDataOffset + index, value)
             index++
         }
+
+        private fun writeCharUnsafe(value: Char) {
+            theUnsafe.putChar(array, byteArrayDataOffset + index, value)
+            index += 2
+        }
+
+        inline fun <T> writeNullable(value: T?, valueWriter: ArraySlice.(T) -> Unit) {
+            writeBoolean(value != null)
+            if (value != null)
+                this.valueWriter(value)
+        }
+
+        fun writeNullableInt(value: Int?) = writeNullable(value) { this.writeInt(it) }
+
+        fun writeNullableString(s: String?) = writeNullable(s) { writeString(it) }
 
         //------------Read------------------------------------------------------------------//
 
@@ -65,8 +97,6 @@ internal object DFGSerializer {
             return theUnsafe.getInt(array, byteArrayDataOffset + index).also { index += 4 }
         }
 
-        fun readNullableInt() = readNullable { this.readInt() }
-
         fun readLong(): Long {
             checkSize(8)
             return theUnsafe.getLong(array, byteArrayDataOffset + index).also { index += 8 }
@@ -77,7 +107,22 @@ internal object DFGSerializer {
             return theUnsafe.getBoolean(array, byteArrayDataOffset + index).also { index++ }
         }
 
+        inline fun <T> readNullable(valueReader: ArraySlice.() -> T) =
+                if (readBoolean()) this.valueReader() else null
+
+        fun readNullableInt() = readNullable { this.readInt() }
+
+        fun readNullableString() = readNullable { readString() }
+
         //------------Write arrays------------------------------------------------------------------//
+
+        fun writeCharArray(source: CharArray) {
+            writeInt(source.size)
+            val dataSize = source.size * 2
+            ensureSize(dataSize)
+            theUnsafe.copyMemory(source, charArrayDataOffset, array, byteArrayDataOffset + index, dataSize.toLong())
+            index += dataSize
+        }
 
         fun writeIntArray(source: IntArray) {
             writeInt(source.size)
@@ -88,17 +133,35 @@ internal object DFGSerializer {
         }
 
         fun writeString(s: String) {
-            val value = theUnsafe.getObject(s, stringValueOffset) as CharArray
-            writeInt(value.size)
-            val dataSize = value.size * 2
-            ensureSize(dataSize)
-            theUnsafe.copyMemory(value, charArrayDataOffset, array, byteArrayDataOffset + index, dataSize.toLong())
-            index += dataSize
+            val value = theUnsafe.getObject(s, stringValueOffset)
+            val isCompactString = value is ByteArray
+            if (!isCompactString)
+                writeCharArray(value as CharArray)
+            else {
+                val size = s.length
+                writeInt(size)
+                ensureSize(size * 2)
+                for (i in 0 until size)
+                    writeCharUnsafe(s[i])
+            }
         }
 
-        fun writeNullableString(s: String?) = writeNullable(s) { writeString(it) }
+        inline fun <reified T> writeArray(array: Array<T>, itemWriter: ArraySlice.(T) -> Unit) {
+            writeInt(array.size)
+            array.forEach { this.itemWriter(it) }
+        }
 
         //------------Read arrays------------------------------------------------------------------//
+
+        fun readCharArray(): CharArray {
+            val size = readInt()
+            val result = CharArray(size)
+            val dataSize = size * 2
+            checkSize(dataSize)
+            theUnsafe.copyMemory(array, byteArrayDataOffset + index, result, charArrayDataOffset, dataSize.toLong())
+            index += dataSize
+            return result
+        }
 
         fun readIntArray(): IntArray {
             val size = readInt()
@@ -110,36 +173,12 @@ internal object DFGSerializer {
             return result
         }
 
-        fun readString(): String {
-            val size = readInt()
-            val data = CharArray(size)
-            val dataSize = size * 2
-            checkSize(dataSize)
-            theUnsafe.copyMemory(array, byteArrayDataOffset + index, data, charArrayDataOffset, dataSize.toLong())
-            index += dataSize
-            val str = theUnsafe.allocateInstance(String::class.java) as String
-            theUnsafe.putObject(str, stringValueOffset, data)
-            return str
-        }
-
-        fun readNullableString() = readNullable { readString() }
+        fun readString() = String(readCharArray())
 
         inline fun <reified T> readArray(itemReader: ArraySlice.() -> T) =
                 Array(readInt()) { this.itemReader() }
 
-        inline fun <reified T> writeArray(array: Array<T>, itemWriter: ArraySlice.(T) -> Unit) {
-            writeInt(array.size)
-            array.forEach { this.itemWriter(it) }
-        }
-
-        inline fun <T> readNullable(valueReader: ArraySlice.() -> T) =
-                if (readBoolean()) this.valueReader() else null
-
-        inline fun <T> writeNullable(value: T?, valueWriter: ArraySlice.(T) -> Unit) {
-            writeBoolean(value != null)
-            if (value != null)
-                this.valueWriter(value)
-        }
+        //------------Resizing------------------------------------------------------------------//
 
         fun trim() {
             if (array.size > index) {
@@ -166,13 +205,26 @@ internal object DFGSerializer {
         }
     }
 
-    class ExternalType(val hash: Long, val name: String?) {
+    class TypeBase(val isFinal: Boolean, val isAbstract: Boolean, val primitiveBinaryType: PrimitiveBinaryType?, val name: String?) {
 
-        constructor(data: ArraySlice) : this(data.readLong(), data.readNullableString())
+        constructor(data: ArraySlice) : this(data.readBoolean(), data.readBoolean(),
+                data.readNullableInt()?.let { PrimitiveBinaryType.values()[it] }, data.readNullableString())
+
+        fun write(result: ArraySlice) {
+            result.writeBoolean(isFinal)
+            result.writeBoolean(isAbstract)
+            result.writeNullableInt(primitiveBinaryType?.ordinal)
+            result.writeNullableString(name)
+        }
+    }
+
+    class ExternalType(val hash: Long, val base: TypeBase) {
+
+        constructor(data: ArraySlice) : this(data.readLong(), TypeBase(data))
 
         fun write(result: ArraySlice) {
             result.writeLong(hash)
-            result.writeNullableString(name)
+            base.write(result)
         }
     }
 
@@ -186,40 +238,38 @@ internal object DFGSerializer {
         }
     }
 
-    class DeclaredType(val isFinal: Boolean, val isAbstract: Boolean, val superTypes: IntArray,
+    class DeclaredType(val base: TypeBase, val index: Int, val superTypes: IntArray,
                        val vtable: IntArray, val itable: Array<ItableSlot>) {
 
-        constructor(data: ArraySlice) : this(data.readBoolean(), data.readBoolean(), data.readIntArray(),
+        constructor(data: ArraySlice) : this(TypeBase(data), data.readInt(), data.readIntArray(),
                 data.readIntArray(), data.readArray { ItableSlot(this) })
 
         fun write(result: ArraySlice) {
-            result.writeBoolean(isFinal)
-            result.writeBoolean(isAbstract)
+            base.write(result)
+            result.writeInt(index)
             result.writeIntArray(superTypes)
             result.writeIntArray(vtable)
             result.writeArray(itable) { it.write(this) }
         }
     }
 
-    class PublicType(val hash: Long, val intestines: DeclaredType, val name: String?) {
+    class PublicType(val hash: Long, val intestines: DeclaredType) {
 
-        constructor(data: ArraySlice) : this(data.readLong(), DeclaredType(data), data.readNullableString())
+        constructor(data: ArraySlice) : this(data.readLong(), DeclaredType(data))
 
         fun write(result: ArraySlice) {
             result.writeLong(hash)
             intestines.write(result)
-            result.writeNullableString(name)
         }
     }
 
-    class PrivateType(val index: Int, val intestines: DeclaredType, val name: String?) {
+    class PrivateType(val index: Int, val intestines: DeclaredType) {
 
-        constructor(data: ArraySlice) : this(data.readInt(), DeclaredType(data), data.readNullableString())
+        constructor(data: ArraySlice) : this(data.readInt(), DeclaredType(data))
 
         fun write(result: ArraySlice) {
             result.writeInt(index)
             intestines.write(result)
-            result.writeNullableString(name)
         }
     }
 
@@ -229,9 +279,9 @@ internal object DFGSerializer {
             result.writeByte(
                     when {
                         external != null -> 1
-                        public != null -> 2
-                        private != null -> 3
-                        else -> 0
+                        public   != null -> 2
+                        private  != null -> 3
+                        else             -> 0
                     }.toByte()
             )
             external?.write(result)
@@ -240,23 +290,36 @@ internal object DFGSerializer {
         }
 
         companion object {
-            fun external(hash: Long, name: String?) = Type(ExternalType(hash, name), null, null, false)
+            fun external(hash: Long, base: TypeBase) = Type(ExternalType(hash, base), null, null, false)
 
-            fun public(hash: Long, intestines: DeclaredType, name: String?) = Type(null, PublicType(hash, intestines, name), null, false)
+            fun public(hash: Long, intestines: DeclaredType) = Type(null, PublicType(hash, intestines), null, false)
 
-            fun private(index: Int, intestines: DeclaredType, name: String?) = Type(null, null, PrivateType(index, intestines, name), false)
+            fun private(index: Int, intestines: DeclaredType) = Type(null, null, PrivateType(index, intestines), false)
 
             fun virtual() = Type(null, null, null, true)
 
             fun read(data: ArraySlice): Type {
                 val tag = data.readByte().toInt()
                 return when (tag) {
-                    1 -> Type(ExternalType(data), null, null, false)
-                    2 -> Type(null, PublicType(data), null, false)
-                    3 -> Type(null, null, PrivateType(data), false)
+                    1    -> Type(ExternalType(data), null, null, false)
+                    2    -> Type(null, PublicType(data), null, false)
+                    3    -> Type(null, null, PrivateType(data), false)
                     else -> Type(null, null, null, true)
                 }
             }
+        }
+    }
+
+    class FunctionSymbolBase(val parameterTypes: IntArray, val returnType: Int, val attributes: Int, val escapes: Int?, val pointsTo: IntArray?) {
+
+        constructor(data: ArraySlice) : this(data.readIntArray(), data.readInt(), data.readInt(), data.readNullableInt(), data.readNullable { readIntArray() })
+
+        fun write(result: ArraySlice) {
+            result.writeIntArray(parameterTypes)
+            result.writeInt(returnType)
+            result.writeInt(attributes)
+            result.writeNullableInt(escapes)
+            result.writeNullable(pointsTo) { writeIntArray(it) }
         }
     }
 
@@ -270,36 +333,41 @@ internal object DFGSerializer {
         }
     }
 
-    class PublicFunctionSymbol(val hash: Long, val index: Int, val name: String?) {
+    class PublicFunctionSymbol(val hash: Long, val index: Int, val bridgeTarget: Int?, val name: String?) {
 
-        constructor(data: ArraySlice) : this(data.readLong(), data.readInt(), data.readNullableString())
+        constructor(data: ArraySlice) : this(data.readLong(), data.readInt(),
+                data.readNullableInt(), data.readNullableString())
 
         fun write(result: ArraySlice) {
             result.writeLong(hash)
             result.writeInt(index)
+            result.writeNullableInt(bridgeTarget)
             result.writeNullableString(name)
         }
     }
 
-    class PrivateFunctionSymbol(val index: Int, val name: String?) {
+    class PrivateFunctionSymbol(val index: Int, val bridgeTarget: Int?, val name: String?) {
 
-        constructor(data: ArraySlice) : this(data.readInt(), data.readNullableString())
+        constructor(data: ArraySlice) : this(data.readInt(), data.readNullableInt(), data.readNullableString())
 
         fun write(result: ArraySlice) {
             result.writeInt(index)
+            result.writeNullableInt(bridgeTarget)
             result.writeNullableString(name)
         }
     }
 
-    class FunctionSymbol(val external: ExternalFunctionSymbol?, val public: PublicFunctionSymbol?, val private: PrivateFunctionSymbol?) {
+    class FunctionSymbol(val base: FunctionSymbolBase, val external: ExternalFunctionSymbol?,
+                         val public: PublicFunctionSymbol?, val private: PrivateFunctionSymbol?) {
 
         fun write(result: ArraySlice) {
+            base.write(result)
             result.writeByte(
                     when {
                         external != null -> 1
-                        public != null -> 2
-                        private != null -> 3
-                        else -> 0
+                        public   != null -> 2
+                        private  != null -> 3
+                        else             -> 0
                     }.toByte()
             )
             external?.write(result)
@@ -308,19 +376,23 @@ internal object DFGSerializer {
         }
 
         companion object {
-            fun external(hash: Long, name: String?) = FunctionSymbol(ExternalFunctionSymbol(hash, name), null, null)
+            fun external(base: FunctionSymbolBase, hash: Long, name: String?) =
+                    FunctionSymbol(base, ExternalFunctionSymbol(hash, name), null, null)
 
-            fun public(hash: Long, index: Int, name: String?) = FunctionSymbol(null, PublicFunctionSymbol(hash, index, name), null)
+            fun public(base: FunctionSymbolBase, hash: Long, index: Int, bridgeTarget: Int?, name: String?) =
+                    FunctionSymbol(base, null, PublicFunctionSymbol(hash, index, bridgeTarget, name), null)
 
-            fun private(index: Int, name: String?) = FunctionSymbol(null, null, PrivateFunctionSymbol(index, name))
+            fun private(base: FunctionSymbolBase, index: Int, bridgeTarget: Int?, name: String?) =
+                    FunctionSymbol(base, null, null, PrivateFunctionSymbol(index, bridgeTarget, name))
 
             fun read(data: ArraySlice): FunctionSymbol {
+                val base = FunctionSymbolBase(data)
                 val tag = data.readByte().toInt()
                 return when (tag) {
-                    1 -> FunctionSymbol(ExternalFunctionSymbol(data), null, null)
-                    2 -> FunctionSymbol(null, PublicFunctionSymbol(data), null)
-                    3 -> FunctionSymbol(null, null, PrivateFunctionSymbol(data))
-                    else -> FunctionSymbol(null, null, null)
+                    1    -> FunctionSymbol(base, ExternalFunctionSymbol(data), null, null)
+                    2    -> FunctionSymbol(base, null, PublicFunctionSymbol(data), null)
+                    3    -> FunctionSymbol(base, null, null, PrivateFunctionSymbol(data))
+                    else -> FunctionSymbol(base, null, null, null)
                 }
             }
         }
@@ -336,12 +408,13 @@ internal object DFGSerializer {
         }
     }
 
-    class Field(val type: Int?, val hash: Long, val name: String?) {
+    class Field(val receiverType: Int?, val type: Int, val hash: Long, val name: String?) {
 
-        constructor(data: ArraySlice) : this(data.readNullableInt(), data.readLong(), data.readNullable { readString() })
+        constructor(data: ArraySlice) : this(data.readNullableInt(), data.readInt(), data.readLong(), data.readNullable { readString() })
 
         fun write(result: ArraySlice) {
-            result.writeNullableInt(type)
+            result.writeNullableInt(receiverType)
+            result.writeInt(type)
             result.writeLong(hash)
             result.writeNullable(name) { writeString(it) }
         }
@@ -375,14 +448,13 @@ internal object DFGSerializer {
         }
     }
 
-    class Call(val callee: Int, val arguments: Array<Edge>, val returnType: Int) {
+    class Call(val callee: Int, val arguments: Array<Edge>) {
 
-        constructor(data: ArraySlice) : this(data.readInt(), data.readArray { Edge(this) }, data.readInt())
+        constructor(data: ArraySlice) : this(data.readInt(), data.readArray { Edge(this) })
 
         fun write(result: ArraySlice) {
             result.writeInt(callee)
             result.writeArray(arguments) { it.write(this) }
-            result.writeInt(returnType)
         }
     }
 
@@ -396,12 +468,13 @@ internal object DFGSerializer {
         }
     }
 
-    class NewObject(val call: Call) {
+    class NewObject(val call: Call, val constructedType: Int) {
 
-        constructor(data: ArraySlice) : this(Call(data))
+        constructor(data: ArraySlice) : this(Call(data), data.readInt())
 
         fun write(result: ArraySlice) {
             call.write(result)
+            result.writeInt(constructedType)
         }
     }
 
@@ -445,6 +518,15 @@ internal object DFGSerializer {
         }
     }
 
+    class AllocInstance(val type: Int) {
+
+        constructor(data: ArraySlice) : this(data.readInt())
+
+        fun write(result: ArraySlice) {
+            result.writeInt(type)
+        }
+    }
+
     class FieldRead(val receiver: Edge?, val field: Field) {
 
         constructor(data: ArraySlice) : this(data.readNullable { Edge(this) }, Field(data))
@@ -466,13 +548,35 @@ internal object DFGSerializer {
         }
     }
 
-    class Variable(val values: Array<Edge>, val temp: Boolean) {
+    class ArrayRead(val array: Edge, val index: Edge) {
 
-        constructor(data: ArraySlice) : this(data.readArray { Edge(this) }, data.readBoolean())
+        constructor(data: ArraySlice) : this(Edge(data), Edge(data))
+
+        fun write(result: ArraySlice) {
+            array.write(result)
+            index.write(result)
+        }
+    }
+
+    class ArrayWrite(val array: Edge, val index: Edge, val value: Edge) {
+
+        constructor(data: ArraySlice) : this(Edge(data), Edge(data), Edge(data))
+
+        fun write(result: ArraySlice) {
+            array.write(result)
+            index.write(result)
+            value.write(result)
+        }
+    }
+
+    class Variable(val values: Array<Edge>, val type: Int, val kind: Byte) {
+
+        constructor(data: ArraySlice) : this(data.readArray { Edge(this) }, data.readInt(), data.readByte())
 
         fun write(result: ArraySlice) {
             result.writeArray(values) { it.write(this) }
-            result.writeBoolean(temp)
+            result.writeInt(type)
+            result.writeByte(kind)
         }
     }
 
@@ -485,49 +589,61 @@ internal object DFGSerializer {
         VTABLE_CALL,
         ITABLE_CALL,
         SINGLETON,
+        ALLOC_INSTANCE,
         FIELD_READ,
         FIELD_WRITE,
+        ARRAY_READ,
+        ARRAY_WRITE,
         VARIABLE
     }
 
     class Node {
-        var parameter   : Parameter?    = null
-        var const       : Const?        = null
-        var staticCall  : StaticCall?   = null
-        var newObject   : NewObject?    = null
-        var vtableCall  : VtableCall?   = null
-        var itableCall  : ItableCall?   = null
-        var singleton   : Singleton?    = null
-        var fieldRead   : FieldRead?    = null
-        var fieldWrite  : FieldWrite?   = null
-        var variable    : Variable?     = null
+        var parameter    : Parameter?     = null
+        var const        : Const?         = null
+        var staticCall   : StaticCall?    = null
+        var newObject    : NewObject?     = null
+        var vtableCall   : VtableCall?    = null
+        var itableCall   : ItableCall?    = null
+        var singleton    : Singleton?     = null
+        var allocInstance: AllocInstance? = null
+        var fieldRead    : FieldRead?     = null
+        var fieldWrite   : FieldWrite?    = null
+        var arrayRead    : ArrayRead?     = null
+        var arrayWrite   : ArrayWrite?    = null
+        var variable     : Variable?      = null
 
         val type get() = when {
-            parameter    != null -> NodeType.PARAMETER
-            const        != null -> NodeType.CONST
-            staticCall   != null -> NodeType.STATIC_CALL
-            newObject    != null -> NodeType.NEW_OBJECT
-            vtableCall   != null -> NodeType.VTABLE_CALL
-            itableCall   != null -> NodeType.ITABLE_CALL
-            singleton    != null -> NodeType.SINGLETON
-            fieldRead    != null -> NodeType.FIELD_READ
-            fieldWrite   != null -> NodeType.FIELD_WRITE
-            variable     != null -> NodeType.VARIABLE
-            else                 -> NodeType.UNKNOWN
+            parameter     != null -> NodeType.PARAMETER
+            const         != null -> NodeType.CONST
+            staticCall    != null -> NodeType.STATIC_CALL
+            newObject     != null -> NodeType.NEW_OBJECT
+            vtableCall    != null -> NodeType.VTABLE_CALL
+            itableCall    != null -> NodeType.ITABLE_CALL
+            singleton     != null -> NodeType.SINGLETON
+            allocInstance != null -> NodeType.ALLOC_INSTANCE
+            fieldRead     != null -> NodeType.FIELD_READ
+            fieldWrite    != null -> NodeType.FIELD_WRITE
+            arrayRead     != null -> NodeType.ARRAY_READ
+            arrayWrite    != null -> NodeType.ARRAY_WRITE
+            variable      != null -> NodeType.VARIABLE
+            else                  -> NodeType.UNKNOWN
         }
 
         fun write(result: ArraySlice) {
             result.writeByte(type.ordinal.toByte())
-            parameter   ?.write(result)
-            const       ?.write(result)
-            staticCall  ?.write(result)
-            newObject   ?.write(result)
-            vtableCall  ?.write(result)
-            itableCall  ?.write(result)
-            singleton   ?.write(result)
-            fieldRead   ?.write(result)
-            fieldWrite  ?.write(result)
-            variable    ?.write(result)
+            parameter    ?.write(result)
+            const        ?.write(result)
+            staticCall   ?.write(result)
+            newObject    ?.write(result)
+            vtableCall   ?.write(result)
+            itableCall   ?.write(result)
+            singleton    ?.write(result)
+            allocInstance?.write(result)
+            fieldRead    ?.write(result)
+            fieldWrite   ?.write(result)
+            arrayRead    ?.write(result)
+            arrayWrite   ?.write(result)
+            variable     ?.write(result)
         }
 
         companion object {
@@ -540,8 +656,8 @@ internal object DFGSerializer {
             fun staticCall(call: Call, receiverType: Int?) =
                     Node().also { it.staticCall = StaticCall(call, receiverType) }
 
-            fun newObject(call: Call) =
-                    Node().also { it.newObject = NewObject(call) }
+            fun newObject(call: Call, constructedType: Int) =
+                    Node().also { it.newObject = NewObject(call, constructedType) }
 
             fun vtableCall(virtualCall: VirtualCall, calleeVtableIndex: Int) =
                     Node().also { it.vtableCall = VtableCall(virtualCall, calleeVtableIndex) }
@@ -552,55 +668,65 @@ internal object DFGSerializer {
             fun singleton(type: Int, constructor: Int?) =
                     Node().also { it.singleton = Singleton(type, constructor) }
 
+            fun allocInst(type: Int) =
+                    Node().also { it.allocInstance = AllocInstance(type) }
+
             fun fieldRead(receiver: Edge?, field: Field) =
                     Node().also { it.fieldRead = FieldRead(receiver, field) }
 
             fun fieldWrite(receiver: Edge?, field: Field, value: Edge) =
                     Node().also { it.fieldWrite = FieldWrite(receiver, field, value) }
 
-            fun variable(values: Array<Edge>, temp: Boolean) =
-                    Node().also { it.variable = Variable(values, temp) }
+            fun arrayRead(array: Edge, index: Edge) =
+                    Node().also { it.arrayRead = ArrayRead(array, index) }
+
+            fun arrayWrite(array: Edge, index: Edge, value: Edge) =
+                    Node().also { it.arrayWrite = ArrayWrite(array, index, value) }
+
+            fun variable(values: Array<Edge>, type: Int, kind: DataFlowIR.VariableKind) =
+                    Node().also { it.variable = Variable(values, type, kind.ordinal.toByte()) }
 
             fun read(data: ArraySlice): Node {
                 val type = enumValues<NodeType>()[data.readByte().toInt()]
                 val result = Node()
                 when (type) {
-                    NodeType.PARAMETER     -> result.parameter    = Parameter   (data)
-                    NodeType.CONST         -> result.const        = Const       (data)
-                    NodeType.STATIC_CALL   -> result.staticCall   = StaticCall  (data)
-                    NodeType.NEW_OBJECT    -> result.newObject    = NewObject   (data)
-                    NodeType.VTABLE_CALL   -> result.vtableCall   = VtableCall  (data)
-                    NodeType.ITABLE_CALL   -> result.itableCall   = ItableCall  (data)
-                    NodeType.SINGLETON     -> result.singleton    = Singleton   (data)
-                    NodeType.FIELD_READ    -> result.fieldRead    = FieldRead   (data)
-                    NodeType.FIELD_WRITE   -> result.fieldWrite   = FieldWrite  (data)
-                    NodeType.VARIABLE      -> result.variable     = Variable    (data)
-                    else                   -> { }
+                    NodeType.PARAMETER      -> result.parameter     = Parameter    (data)
+                    NodeType.CONST          -> result.const         = Const        (data)
+                    NodeType.STATIC_CALL    -> result.staticCall    = StaticCall   (data)
+                    NodeType.NEW_OBJECT     -> result.newObject     = NewObject    (data)
+                    NodeType.VTABLE_CALL    -> result.vtableCall    = VtableCall   (data)
+                    NodeType.ITABLE_CALL    -> result.itableCall    = ItableCall   (data)
+                    NodeType.SINGLETON      -> result.singleton     = Singleton    (data)
+                    NodeType.ALLOC_INSTANCE -> result.allocInstance = AllocInstance(data)
+                    NodeType.FIELD_READ     -> result.fieldRead     = FieldRead    (data)
+                    NodeType.FIELD_WRITE    -> result.fieldWrite    = FieldWrite   (data)
+                    NodeType.ARRAY_READ     -> result.arrayRead     = ArrayRead    (data)
+                    NodeType.ARRAY_WRITE    -> result.arrayWrite    = ArrayWrite   (data)
+                    NodeType.VARIABLE       -> result.variable      = Variable     (data)
+                    else                    -> { }
                 }
                 return result
             }
         }
     }
 
-    class FunctionBody(val nodes: Array<Node>, val returns: Int) {
+    class FunctionBody(val nodes: Array<Node>, val returns: Int, val throws: Int) {
 
-        constructor(data: ArraySlice) : this(data.readArray { Node.read(this) }, data.readInt())
+        constructor(data: ArraySlice) : this(data.readArray { Node.read(this) }, data.readInt(), data.readInt())
 
         fun write(result: ArraySlice) {
             result.writeArray(nodes) { it.write(this) }
             result.writeInt(returns)
+            result.writeInt(throws)
         }
     }
 
-    class Function(val symbol: Int, val isGlobalInitializer: Boolean,
-                   val numberOfParameters: Int, val body: FunctionBody) {
+    class Function(val symbol: Int, val body: FunctionBody) {
 
-        constructor(data: ArraySlice) : this(data.readInt(), data.readBoolean(), data.readInt(), FunctionBody(data))
+        constructor(data: ArraySlice) : this(data.readInt(), FunctionBody(data))
 
         fun write(result: ArraySlice) {
             result.writeInt(symbol)
-            result.writeBoolean(isGlobalInitializer)
-            result.writeInt(numberOfParameters)
             body.write(result)
         }
     }
@@ -615,6 +741,37 @@ internal object DFGSerializer {
         }
     }
 
+    private fun mergeHashes(hashes: List<Long>): Long {
+        var result = 0L
+        for (x in hashes)
+            result = result * 997 + x
+        return result
+    }
+
+    private fun mergeHashes(vararg hashes: Long) = mergeHashes(hashes.asList())
+
+    private val String.hash: Long get() {
+        return mergeHashes((0 until length).map { this[it].toLong() })
+    }
+
+    private fun computeDataLayoutHash(kClass: KClass<*>): Long {
+        if (kClass.javaPrimitiveType != null || kClass == String::class || kClass.java.isEnum) {
+            return kClass.jvmName.hash
+        }
+        if (kClass.java.isArray)
+            return mergeHashes("array".hash, computeDataLayoutHash(kClass.java.componentType.kotlin))
+        val properties = kClass.memberProperties.sortedBy { it.name }
+        val propertyTypeHashes =
+                properties.map {
+                    val propHash = computeDataLayoutHash(it.returnType.classifier!! as KClass<*>)
+                    if (it.returnType.isMarkedNullable)
+                        mergeHashes("nullable".hash, propHash)
+                    else propHash
+                }
+        val propertyNameHashes = properties.map { it.name.hash }
+        return mergeHashes(propertyTypeHashes + propertyNameHashes)
+    }
+
     private val DEBUG = 0
 
     private inline fun DEBUG_OUTPUT(severity: Int, block: () -> Unit) {
@@ -623,22 +780,27 @@ internal object DFGSerializer {
 
     fun serialize(context: Context, moduleDFG: ModuleDFG) {
         val symbolTable = moduleDFG.symbolTable
-        val typeMap = (symbolTable.classMap.values + DataFlowIR.Type.Virtual).distinct().withIndex().associateBy({ it.value }, { it.index })
+        val typeList = symbolTable.classMap.values + symbolTable.primitiveMap.values + DataFlowIR.Type.Virtual
+        val typeMap = typeList.distinct().withIndex().associateBy({ it.value }, { it.index })
         val functionSymbolMap = symbolTable.functionMap.values.distinct().withIndex().associateBy({ it.value }, { it.index })
-        DEBUG_OUTPUT(1) {
+        DEBUG_OUTPUT(0) {
             println("TYPES: ${typeMap.size}, " +
                     "FUNCTIONS: ${functionSymbolMap.size}, " +
                     "PRIVATE FUNCTIONS: ${functionSymbolMap.keys.count { it is DataFlowIR.FunctionSymbol.Private }}, " +
-                    "FUNCTION TABLE SIZE: ${symbolTable.couldBeCalledVirtuallyIndex}"
+                    "FUNCTION TABLE SIZE: ${symbolTable.privateFunIndex}"
             )
         }
         val types = typeMap.entries
                 .sortedBy { it.value }
                 .map {
+
+                    fun buildTypeBase(type: DataFlowIR.Type) =
+                            TypeBase(type.isFinal, type.isAbstract, type.primitiveBinaryType, type.name)
+
                     fun buildTypeIntestines(type: DataFlowIR.Type.Declared) =
                             DeclaredType(
-                                    type.isFinal,
-                                    type.isAbstract,
+                                    buildTypeBase(type),
+                                    type.symbolTableIndex,
                                     type.superTypes.map { typeMap[it]!! }.toIntArray(),
                                     type.vtable.map { functionSymbolMap[it]!! }.toIntArray(),
                                     type.itable.map { (hash, symbol) -> ItableSlot(hash, functionSymbolMap[symbol]!!) }.toTypedArray()
@@ -648,11 +810,11 @@ internal object DFGSerializer {
                     when (type) {
                         DataFlowIR.Type.Virtual -> Type.virtual()
 
-                        is DataFlowIR.Type.External -> Type.external(type.hash, type.name)
+                        is DataFlowIR.Type.External -> Type.external(type.hash, buildTypeBase(type))
 
-                        is DataFlowIR.Type.Public -> Type.public(type.hash, buildTypeIntestines(type), type.name)
+                        is DataFlowIR.Type.Public -> Type.public(type.hash, buildTypeIntestines(type))
 
-                        is DataFlowIR.Type.Private -> Type.private(type.index, buildTypeIntestines(type), type.name)
+                        is DataFlowIR.Type.Private -> Type.private(type.index, buildTypeIntestines(type))
 
                         else -> error("Unknown type $type")
                     }
@@ -661,18 +823,31 @@ internal object DFGSerializer {
         val functionSymbols = functionSymbolMap.entries
                 .sortedBy { it.value }
                 .map {
-                    val functionSymbol = it.key
-                    when (functionSymbol) {
+
+                    fun buildFunctionSymbolBase(symbol: DataFlowIR.FunctionSymbol) =
+                            FunctionSymbolBase(
+                                    symbol.parameterTypes.map { typeMap[it]!! }.toIntArray(),
+                                    typeMap[symbol.returnType]!!,
+                                    symbol.attributes,
+                                    symbol.escapes,
+                                    symbol.pointsTo
+                            )
+
+                    val symbol = it.key
+                    val bridgeTarget = (symbol as? DataFlowIR.FunctionSymbol.Declared)?.let { functionSymbolMap[it] }
+                    when (symbol) {
                         is DataFlowIR.FunctionSymbol.External ->
-                            FunctionSymbol.external(functionSymbol.hash, functionSymbol.name)
+                            FunctionSymbol.external(buildFunctionSymbolBase(symbol), symbol.hash, symbol.name)
 
                         is DataFlowIR.FunctionSymbol.Public ->
-                            FunctionSymbol.public(functionSymbol.hash, functionSymbol.symbolTableIndex, functionSymbol.name)
+                            FunctionSymbol.public(buildFunctionSymbolBase(symbol), symbol.hash,
+                                    symbol.symbolTableIndex, bridgeTarget, symbol.name)
 
                         is DataFlowIR.FunctionSymbol.Private ->
-                            FunctionSymbol.private(functionSymbol.symbolTableIndex, functionSymbol.name)
+                            FunctionSymbol.private(buildFunctionSymbolBase(symbol), symbol.symbolTableIndex,
+                                    bridgeTarget, symbol.name)
 
-                        else -> error("Unknown function symbol $functionSymbol")
+                        else -> error("Unknown function symbol $symbol")
                     }
                 }
                 .toTypedArray()
@@ -691,15 +866,14 @@ internal object DFGSerializer {
                                 fun buildCall(call: DataFlowIR.Node.Call) =
                                         Call(
                                                 functionSymbolMap[call.callee]!!,
-                                                call.arguments.map { buildEdge(it) }.toTypedArray(),
-                                                typeMap[call.returnType]!!
+                                                call.arguments.map { buildEdge(it) }.toTypedArray()
                                         )
 
                                 fun buildVirtualCall(virtualCall: DataFlowIR.Node.VirtualCall) =
                                         VirtualCall(buildCall(virtualCall), typeMap[virtualCall.receiverType]!!)
 
                                 fun buildField(field: DataFlowIR.Field) =
-                                        Field(field.type?.let { typeMap[it]!! }, field.hash, field.name)
+                                        Field(field.receiverType?.let { typeMap[it]!! }, typeMap[field.type]!!, field.hash, field.name)
 
                                 when (node) {
                                     is DataFlowIR.Node.Parameter -> Node.parameter(node.index)
@@ -709,7 +883,8 @@ internal object DFGSerializer {
                                     is DataFlowIR.Node.StaticCall ->
                                         Node.staticCall(buildCall(node), node.receiverType?.let { typeMap[it]!! })
 
-                                    is DataFlowIR.Node.NewObject -> Node.newObject(buildCall(node))
+                                    is DataFlowIR.Node.NewObject ->
+                                        Node.newObject(buildCall(node), typeMap[node.constructedType]!!)
 
                                     is DataFlowIR.Node.VtableCall ->
                                         Node.vtableCall(buildVirtualCall(node), node.calleeVtableIndex)
@@ -720,37 +895,44 @@ internal object DFGSerializer {
                                     is DataFlowIR.Node.Singleton ->
                                         Node.singleton(typeMap[node.type]!!, node.constructor?.let { functionSymbolMap[it]!! })
 
+                                    is DataFlowIR.Node.AllocInstance ->
+                                        Node.allocInst(typeMap[node.type]!!)
+
                                     is DataFlowIR.Node.FieldRead ->
                                         Node.fieldRead(node.receiver?.let { buildEdge(it) }, buildField(node.field))
 
                                     is DataFlowIR.Node.FieldWrite ->
                                         Node.fieldWrite(node.receiver?.let { buildEdge(it) }, buildField(node.field), buildEdge(node.value))
 
+                                    is DataFlowIR.Node.ArrayRead ->
+                                        Node.arrayRead(buildEdge(node.array), buildEdge(node.index))
+
+                                    is DataFlowIR.Node.ArrayWrite ->
+                                        Node.arrayWrite(buildEdge(node.array), buildEdge(node.index), buildEdge(node.value))
+
                                     is DataFlowIR.Node.Variable ->
-                                        Node.variable(node.values.map { buildEdge(it) }.toTypedArray(), node.temp)
+                                        Node.variable(node.values.map { buildEdge(it) }.toTypedArray(), typeMap[node.type]!!, node.kind)
 
                                     else -> error("Unknown node $node")
                                 }
                             }
                             .toTypedArray()
                     Function(
-                            functionSymbolMap[function.symbol]!!,
-                            function.isGlobalInitializer,
-                            function.numberOfParameters,
-                            FunctionBody(nodes, nodeMap[body.returns]!!)
+                            symbol = functionSymbolMap[function.symbol]!!,
+                            body   = FunctionBody(nodes, nodeMap[body.returns]!!, nodeMap[body.throws]!!)
                     )
                 }
                 .toTypedArray()
         val module = Module(SymbolTable(types, functionSymbols), functions)
         val writer = ArraySlice(ByteArray(1024))
-        writer.writeInt(VERSION)
+        writer.writeLong(computeDataLayoutHash(Module::class))
         module.write(writer)
         writer.trim()
         context.dataFlowGraph = writer.array
     }
 
     // TODO: Deserialize functions bodies lazily.
-    fun deserialize(context: Context, startPrivateTypeIndex: Int, startPrivateFunIndex: Int): ExternalModulesDFG {
+    fun deserialize(context: Context, startPrivateTypeIndex: Int, startPrivateFunIndex: Int): ExternalModulesDFG? {
         var privateTypeIndex = startPrivateTypeIndex
         var privateFunIndex = startPrivateFunIndex
         val publicTypesMap = mutableMapOf<Long, DataFlowIR.Type.Public>()
@@ -761,16 +943,20 @@ internal object DFGSerializer {
         context.librariesWithDependencies.forEach { library ->
             val libraryDataFlowGraph = library.dataFlowGraph
 
-            DEBUG_OUTPUT(1) {
+            DEBUG_OUTPUT(0) {
                 println("Data flow graph size for lib '${library.libraryName}': ${libraryDataFlowGraph?.size ?: 0}")
             }
 
             if (libraryDataFlowGraph != null) {
-                val module = DataFlowIR.Module(library.moduleDescriptor(specifics))
+                val module = DataFlowIR.Module(
+                        DefaultKonanModuleDescriptorFactory.createModuleDescriptor(library, specifics))
                 val reader = ArraySlice(libraryDataFlowGraph)
-                val version = reader.readInt()
-                if (version != VERSION)
-                    error("Expected version $VERSION but actual is $version")
+                val dataLayoutHash = reader.readLong()
+                val expectedHash = computeDataLayoutHash(Module::class)
+                if (dataLayoutHash != expectedHash) {
+                    context.report(null, null, "Expected data layout hash: $expectedHash but actual is: $dataLayoutHash", false)
+                    return null
+                }
                 val moduleDataFlowGraph = Module(reader)
 
                 val symbolTable = moduleDataFlowGraph.symbolTable
@@ -782,36 +968,51 @@ internal object DFGSerializer {
                         val public = it.public
                         val private = it.private
                         when {
-                            external != null -> DataFlowIR.Type.External(external.hash, external.name)
+                            external != null ->
+                                DataFlowIR.Type.External(external.hash, external.base.isFinal, external.base.isAbstract,
+                                        external.base.primitiveBinaryType, external.base.name)
 
-                            public != null ->
-                                DataFlowIR.Type.Public(public.hash, public.intestines.isFinal,
-                                        public.intestines.isAbstract, public.name).also {
+                            public != null -> {
+                                val symbolTableIndex = public.intestines.index
+                                if (symbolTableIndex >= 0)
+                                    ++module.numberOfClasses
+                                DataFlowIR.Type.Public(public.hash, public.intestines.base.isFinal,
+                                        public.intestines.base.isAbstract, public.intestines.base.primitiveBinaryType,
+                                        module, symbolTableIndex, public.intestines.base.name).also {
                                     publicTypesMap.put(it.hash, it)
                                     allTypes += it
                                 }
+                            }
 
-                            else ->
-                                DataFlowIR.Type.Private(privateTypeIndex++, private!!.intestines.isFinal,
-                                        private.intestines.isAbstract, private.name).also {
+                            else -> {
+                                val symbolTableIndex = private!!.intestines.index
+                                if (symbolTableIndex >= 0)
+                                    ++module.numberOfClasses
+                                DataFlowIR.Type.Private(privateTypeIndex++, private.intestines.base.isFinal,
+                                        private.intestines.base.isAbstract, private.intestines.base.primitiveBinaryType,
+                                        module, symbolTableIndex, private.intestines.base.name).also {
                                     allTypes += it
                                 }
+                            }
                         }
                     }
                 }
 
                 val functionSymbols = symbolTable.functionSymbols.map {
+                    val attributes = it.base.attributes
                     val external = it.external
                     val public = it.public
                     val private = it.private
                     when {
-                        external != null -> DataFlowIR.FunctionSymbol.External(external.hash, external.name)
+                        external != null ->
+                            DataFlowIR.FunctionSymbol.External(external.hash, attributes, external.name)
 
                         public != null -> {
                             val symbolTableIndex = public.index
                             if (symbolTableIndex >= 0)
                                 ++module.numberOfFunctions
-                            DataFlowIR.FunctionSymbol.Public(public.hash, module, symbolTableIndex, public.name).also {
+                            DataFlowIR.FunctionSymbol.Public(public.hash,
+                                    module, symbolTableIndex, attributes, null, public.name).also {
                                 publicFunctionsMap.put(it.hash, it)
                             }
                         }
@@ -820,12 +1021,18 @@ internal object DFGSerializer {
                             val symbolTableIndex = private!!.index
                             if (symbolTableIndex >= 0)
                                 ++module.numberOfFunctions
-                            DataFlowIR.FunctionSymbol.Private(privateFunIndex++, module, symbolTableIndex, private.name)
+                            DataFlowIR.FunctionSymbol.Private(privateFunIndex++,
+                                    module, symbolTableIndex, attributes, null, private.name)
                         }
+                    }.apply {
+                        parameterTypes = it.base.parameterTypes.map { types[it] }.toTypedArray()
+                        returnType = types[it.base.returnType]
+                        escapes = it.base.escapes
+                        pointsTo = it.base.pointsTo
                     }
                 }
 
-                DEBUG_OUTPUT(1) {
+                DEBUG_OUTPUT(0) {
                     println("Lib: ${library.libraryName}, types: ${types.size}, functions: ${functionSymbols.size}")
                 }
 
@@ -845,6 +1052,16 @@ internal object DFGSerializer {
                     }
                 }
 
+                symbolTable.functionSymbols.forEachIndexed { index, symbol ->
+                    val deserializedSymbol = functionSymbols[index] as? DataFlowIR.FunctionSymbol.Declared
+                            ?: return@forEachIndexed
+                    val bridgeTarget = if (deserializedSymbol is DataFlowIR.FunctionSymbol.Public)
+                                           symbol.public!!.bridgeTarget
+                                       else
+                                           symbol.private!!.bridgeTarget
+                    deserializedSymbol.bridgeTarget = bridgeTarget?.let { functionSymbols[it] }
+                }
+
                 fun deserializeEdge(edge: Edge) =
                         DataFlowIR.Edge(edge.castToType?.let { types[it] })
 
@@ -852,7 +1069,7 @@ internal object DFGSerializer {
                         DataFlowIR.Node.Call(
                                 functionSymbols[call.callee],
                                 call.arguments.map { deserializeEdge(it) },
-                                types[call.returnType]
+                                irCallSite = null
                         )
 
                 fun deserializeVirtualCall(virtualCall: VirtualCall): DataFlowIR.Node.VirtualCall {
@@ -860,14 +1077,13 @@ internal object DFGSerializer {
                     return DataFlowIR.Node.VirtualCall(
                             call.callee,
                             call.arguments,
-                            call.returnType,
                             types[virtualCall.receiverType],
-                            null
+                            irCallSite = null
                     )
                 }
 
                 fun deserializeField(field: Field) =
-                        DataFlowIR.Field(field.type?.let { types[it] }, field.hash, field.name)
+                        DataFlowIR.Field(field.receiverType?.let { types[it] }, types[field.type], field.hash, field.name)
 
                 fun deserializeBody(body: FunctionBody): DataFlowIR.FunctionBody {
                     val nodes = body.nodes.map {
@@ -882,12 +1098,13 @@ internal object DFGSerializer {
                                 val staticCall = it.staticCall!!
                                 val call = deserializeCall(staticCall.call)
                                 val receiverType = staticCall.receiverType?.let { types[it] }
-                                DataFlowIR.Node.StaticCall(call.callee, call.arguments, call.returnType, receiverType)
+                                DataFlowIR.Node.StaticCall(call.callee, call.arguments, receiverType, irCallSite = null)
                             }
 
                             NodeType.NEW_OBJECT -> {
-                                val call = deserializeCall(it.newObject!!.call)
-                                DataFlowIR.Node.NewObject(call.callee, call.arguments, call.returnType)
+                                val newObject = it.newObject!!
+                                val call = deserializeCall(newObject.call)
+                                DataFlowIR.Node.NewObject(call.callee, call.arguments, types[newObject.constructedType], irCallSite = null)
                             }
 
                             NodeType.VTABLE_CALL -> {
@@ -898,8 +1115,7 @@ internal object DFGSerializer {
                                         virtualCall.receiverType,
                                         vtableCall.calleeVtableIndex,
                                         virtualCall.arguments,
-                                        virtualCall.returnType,
-                                        virtualCall.callSite
+                                        virtualCall.irCallSite
                                 )
                             }
 
@@ -911,8 +1127,7 @@ internal object DFGSerializer {
                                         virtualCall.receiverType,
                                         itableCall.calleeHash,
                                         virtualCall.arguments,
-                                        virtualCall.returnType,
-                                        virtualCall.callSite
+                                        virtualCall.irCallSite
                                 )
                             }
 
@@ -921,10 +1136,14 @@ internal object DFGSerializer {
                                 DataFlowIR.Node.Singleton(types[singleton.type], singleton.constructor?.let { functionSymbols[it] })
                             }
 
+                            NodeType.ALLOC_INSTANCE -> {
+                                DataFlowIR.Node.AllocInstance(types[it.allocInstance!!.type])
+                            }
+
                             NodeType.FIELD_READ -> {
                                 val fieldRead = it.fieldRead!!
                                 val receiver = fieldRead.receiver?.let { deserializeEdge(it) }
-                                DataFlowIR.Node.FieldRead(receiver, deserializeField(fieldRead.field))
+                                DataFlowIR.Node.FieldRead(receiver, deserializeField(fieldRead.field), null)
                             }
 
                             NodeType.FIELD_WRITE -> {
@@ -933,9 +1152,20 @@ internal object DFGSerializer {
                                 DataFlowIR.Node.FieldWrite(receiver, deserializeField(fieldWrite.field), deserializeEdge(fieldWrite.value))
                             }
 
+                            NodeType.ARRAY_READ -> {
+                                val arrayRead = it.arrayRead!!
+                                DataFlowIR.Node.ArrayRead(deserializeEdge(arrayRead.array), deserializeEdge(arrayRead.index), null)
+                            }
+
+                            NodeType.ARRAY_WRITE -> {
+                                val arrayWrite = it.arrayWrite!!
+                                DataFlowIR.Node.ArrayWrite(deserializeEdge(arrayWrite.array), deserializeEdge(arrayWrite.index), deserializeEdge(arrayWrite.value))
+                            }
+
                             NodeType.VARIABLE -> {
                                 val variable = it.variable!!
-                                DataFlowIR.Node.Variable(variable.values.map { deserializeEdge(it) }, variable.temp)
+                                DataFlowIR.Node.Variable(variable.values.map { deserializeEdge(it) },
+                                        types[variable.type], enumValues<DataFlowIR.VariableKind>()[variable.kind.toInt()])
                             }
 
                             else -> error("Unknown node: $it")
@@ -977,6 +1207,21 @@ internal object DFGSerializer {
                                 deserializedFieldWrite.value.node = nodes[fieldWrite.value.node]
                             }
 
+                            NodeType.ARRAY_READ -> {
+                                val deserializedArrayRead = deserializedNode as DataFlowIR.Node.ArrayRead
+                                val arrayRead = node.arrayRead!!
+                                deserializedArrayRead.array.node = nodes[arrayRead.array.node]
+                                deserializedArrayRead.index.node = nodes[arrayRead.index.node]
+                            }
+
+                            NodeType.ARRAY_WRITE -> {
+                                val deserializedArrayWrite = deserializedNode as DataFlowIR.Node.ArrayWrite
+                                val arrayWrite = node.arrayWrite!!
+                                deserializedArrayWrite.array.node = nodes[arrayWrite.array.node]
+                                deserializedArrayWrite.index.node = nodes[arrayWrite.index.node]
+                                deserializedArrayWrite.value.node = nodes[arrayWrite.value.node]
+                            }
+
                             NodeType.VARIABLE ->
                                 node.variable!!.values.forEachIndexed { i, value ->
                                     (deserializedNode as DataFlowIR.Node.Variable).values[i].node = nodes[value.node]
@@ -985,13 +1230,33 @@ internal object DFGSerializer {
                             else -> { }
                         }
                     }
-                    return DataFlowIR.FunctionBody(nodes, nodes[body.returns] as DataFlowIR.Node.Variable)
+                    return DataFlowIR.FunctionBody(nodes, nodes[body.returns] as DataFlowIR.Node.Variable, nodes[body.throws] as DataFlowIR.Node.Variable)
                 }
 
                 moduleDataFlowGraph.functions.forEach {
                     val symbol = functionSymbols[it.symbol]
-                    functions.put(symbol, DataFlowIR.Function(symbol, it.isGlobalInitializer, it.numberOfParameters, deserializeBody(it.body)))
+                    val function = DataFlowIR.Function(
+                            symbol         = symbol,
+                            body           = deserializeBody(it.body)
+                    )
+                    functions.put(symbol, function)
                 }
+            }
+        }
+
+        DEBUG_OUTPUT(1) {
+            allTypes.forEach {
+                println(it)
+                println("    SUPER TYPES:")
+                it.superTypes.forEach { println("        $it") }
+                println("    VTABLE:")
+                it.vtable.forEach { println("        $it") }
+                println("    ITABLE:")
+                it.itable.forEach { t, u -> println("        $t: $u") }
+            }
+
+            functions.forEach {
+                println(it.key)
             }
         }
 

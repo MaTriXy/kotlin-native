@@ -16,7 +16,8 @@
 
 package kotlinx.cinterop
 
-import konan.internal.Intrinsic
+import kotlin.native.*
+import kotlin.native.internal.Intrinsic
 
 @PublishedApi
 internal inline val pointerSize: Int
@@ -111,6 +112,23 @@ internal object nativeMemUtils {
         cfree(mem)
     }
 }
+
+fun CPointer<ShortVar>.toKString(): String {
+    val nativeBytes = this
+
+    var length = 0
+    while (nativeBytes[length] != 0.toShort()) {
+        ++length
+    }
+    val bytes = CharArray(length)
+    var index = 0
+    while (index < length) {
+        bytes[index] = nativeBytes[index].toChar()
+        ++index
+    }
+    return String(bytes)
+}
+
 
 @SymbolName("Kotlin_interop_malloc")
 private external fun malloc(size: Long, align: Int): NativePtr

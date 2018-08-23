@@ -17,13 +17,14 @@
 package org.jetbrains.kotlin.backend.konan
 
 import org.jetbrains.kotlin.analyzer.AnalysisResult
-import org.jetbrains.kotlin.backend.konan.descriptors.createKonanModuleDescriptor
-import org.jetbrains.kotlin.backend.konan.descriptors.CurrentKonanModule
-import org.jetbrains.kotlin.config.CommonConfigurationKeys
-import org.jetbrains.kotlin.config.LanguageVersionSettingsImpl
+import org.jetbrains.kotlin.config.*
 import org.jetbrains.kotlin.context.ModuleContext
 import org.jetbrains.kotlin.context.MutableModuleContextImpl
 import org.jetbrains.kotlin.context.ProjectContext
+import org.jetbrains.kotlin.descriptors.konan.CurrentKonanModuleOrigin
+import org.jetbrains.kotlin.descriptors.konan.createKonanModuleDescriptor
+import org.jetbrains.kotlin.descriptors.konan.isKonanStdlib
+import org.jetbrains.kotlin.konan.util.visibleName
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.resolve.*
@@ -35,12 +36,13 @@ object TopDownAnalyzerFacadeForKonan {
 
         val projectContext = ProjectContext(config.project)
 
-        val module = createKonanModuleDescriptor(moduleName, projectContext.storageManager, origin = CurrentKonanModule)
+        val module = createKonanModuleDescriptor(moduleName, projectContext.storageManager, origin = CurrentKonanModuleOrigin)
         val context = MutableModuleContextImpl(module, projectContext)
 
-        if (!module.isStdlib()) {
-            context.setDependencies(listOf(module) + config.moduleDescriptors +
-                    config.getOrCreateForwardDeclarationsModule(module.builtIns, projectContext.storageManager))
+        if (!module.isKonanStdlib()) {
+            val dependencies = listOf(module) + config.moduleDescriptors +
+                    config.getOrCreateForwardDeclarationsModule(module.builtIns, projectContext.storageManager)
+            module.setDependencies(dependencies, config.friends)
         } else {
             assert (config.moduleDescriptors.isEmpty())
             context.setDependencies(module)
@@ -56,13 +58,15 @@ object TopDownAnalyzerFacadeForKonan {
             config: KonanConfig
     ): AnalysisResult {
 
-        // we print out each file we compile for now
-        files.forEach{println(it)}
+        // we print out each file we compile if frontend phase is verbose
+        files.takeIf { with (KonanPhases) {
+            phases[known(KonanPhase.FRONTEND.visibleName)]!!.verbose
+        }} ?.forEach(::println)
 
         val analyzerForKonan = createTopDownAnalyzerForKonan(
                 moduleContext, trace,
                 FileBasedDeclarationProviderFactory(moduleContext.storageManager, files),
-                config.configuration.get(CommonConfigurationKeys.LANGUAGE_VERSION_SETTINGS, LanguageVersionSettingsImpl.DEFAULT)
+                config.configuration.get(CommonConfigurationKeys.LANGUAGE_VERSION_SETTINGS)!!
         )
 
         analyzerForKonan.analyzeDeclarations(TopDownAnalysisMode.TopLevelDeclarations, files)

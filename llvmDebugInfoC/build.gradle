@@ -17,6 +17,18 @@
 apply plugin: "cpp"
 apply plugin: "c"
 
+buildscript {
+  ext.rootBuildDirectory = file('..')
+
+  apply from: "$rootBuildDirectory/gradle/kotlinGradlePlugin.gradle"
+
+  dependencies {
+    classpath "org.jetbrains.kotlin:kotlin-stdlib:$buildKotlinVersion"
+    classpath "org.jetbrains.kotlin:kotlin-native-shared:$konanVersion"
+  }
+}
+import org.jetbrains.kotlin.konan.target.ClangArgs
+
 model {
   components {
     debugInfo(NativeLibrarySpec) {
@@ -25,12 +37,20 @@ model {
         binaries.withType(StaticLibraryBinarySpec) { binary ->
           if (!project.parent.convention.plugins.platformInfo.isWindows())
              cppCompiler.args "-fPIC"
-          cppCompiler.args "--std=c++11", "-g", "-I${llvmDir}/include", "-I${projectDir}/src/main/include"
+          cppCompiler.args "--std=c++11", "-I${llvmDir}/include", "-I${projectDir}/src/main/include"
           linker.args "-L${llvmDir}/lib", "-lLLVMCore", "-lLLVMSupport"
         }
         binaries.withType(SharedLibraryBinarySpec) { binary ->
             buildable = false
         }
+    }
+  }
+
+  toolChains {
+    clang(Clang) {
+      eachPlatform {
+        cppCompiler.withArguments(ClangArgs.&filterGradleNativeSoftwareFlags)
+      }
     }
   }
 }

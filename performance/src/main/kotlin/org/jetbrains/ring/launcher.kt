@@ -23,21 +23,47 @@ val BENCHMARK_SIZE = 100
 
 //-----------------------------------------------------------------------------//
 
-class Launcher(val numWarmIterations: Int, val numMeasureIterations: Int) {
-    val results = mutableMapOf<String, Long>()
+class Launcher(val numWarmIterations: Int) {
+    class Results(val mean: Double, val variance: Double)
 
-    fun launch(benchmark: () -> Any?, coeff: Double = 1.0): Long {                          // If benchmark runs too long - use coeff to speed it up.
-        var i = (numWarmIterations    * coeff).toInt()
-        var j = (numMeasureIterations * coeff).toInt()
+    val results = mutableMapOf<String, Results>()
+
+    fun launch(benchmark: () -> Any?): Results {                          // If benchmark runs too long - use coeff to speed it up.
+        var i = numWarmIterations
 
         while (i-- > 0) benchmark()
-        val time = measureNanoTime {
-            while (j-- > 0) {
-                benchmark()
+        cleanup()
+
+        var autoEvaluatedNumberOfMeasureIteration = 1
+        while (true) {
+            var j = autoEvaluatedNumberOfMeasureIteration
+            val time = measureNanoTime {
+                while (j-- > 0) {
+                    benchmark()
+                }
+                cleanup()
             }
+            if (time >= 100L * 1_000_000) // 100ms
+                break
+            autoEvaluatedNumberOfMeasureIteration *= 2
         }
 
-        return (time / numMeasureIterations / coeff).toLong()
+        val attempts = 10
+        val samples = DoubleArray(attempts)
+        for (k in samples.indices) {
+            i = autoEvaluatedNumberOfMeasureIteration
+            val time = measureNanoTime {
+                while (i-- > 0) {
+                    benchmark()
+                }
+                cleanup()
+            }
+            samples[k] = time * 1.0 / autoEvaluatedNumberOfMeasureIteration
+        }
+        val mean = samples.sum() / attempts
+        val variance = samples.indices.sumByDouble { (samples[it] - mean) * (samples[it] - mean) } / attempts
+
+        return Results(mean, variance)
     }
 
     //-------------------------------------------------------------------------//
@@ -84,20 +110,18 @@ class Launcher(val numWarmIterations: Int, val numMeasureIterations: Int) {
     //-------------------------------------------------------------------------//
 
     fun printResultsNormalized() {
-        var total = 0.0
-        results.forEach {
-            val normaTime = NormaResults[it.key]
-            if (normaTime == null) println("ERROR: no norma for benchmark ${it.key}")
-
-            val norma     = it.value.toDouble() / normaTime!!.toDouble()
+        var totalMean = 0.0
+        var totalVariance = 0.0
+        results.asSequence().sortedBy { it.key }.forEach {
             val niceName  = it.key.padEnd(50, ' ')
-            val niceNorma = norma.toString(2).padStart(10, ' ')
-            println("$niceName : $niceNorma")
+            println("$niceName : ${it.value.mean.toString(9)} : ${kotlin.math.sqrt(it.value.variance).toString(9)}")
 
-            total += norma
+            totalMean += it.value.mean
+            totalVariance += it.value.variance
         }
-        val average = total / results.size
-        println("\nRingAverage: ${average.toString(2)}")
+        val averageMean = totalMean / results.size
+        val averageStdDev = kotlin.math.sqrt(totalVariance) / results.size
+        println("\nRingAverage: ${averageMean.toString(9)} : ${averageStdDev.toString(9)}")
     }
 
     //-------------------------------------------------------------------------//
@@ -436,7 +460,7 @@ class Launcher(val numWarmIterations: Int, val numMeasureIterations: Int) {
     //-------------------------------------------------------------------------//
 
     fun runOctoTest() {
-        results["OctoTest"] = launch(::octoTest, 0.1)
+        results["OctoTest"] = launch(::octoTest)
     }
 
     //-------------------------------------------------------------------------//

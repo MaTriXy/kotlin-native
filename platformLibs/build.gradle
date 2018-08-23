@@ -1,0 +1,103 @@
+import org.jetbrains.kotlin.KlibInstall
+import org.jetbrains.kotlin.konan.target.*
+import org.jetbrains.kotlin.konan.target.KonanTarget
+import org.jetbrains.kotlin.konan.util.*
+
+import static org.jetbrains.kotlin.konan.util.VisibleNamedKt.getVisibleName
+
+apply plugin: 'konan'
+
+buildscript {
+    repositories {
+        maven {
+            url 'https://cache-redirector.jetbrains.com/maven-central'
+        }
+        maven {
+            url buildKotlinCompilerRepo
+        }
+    }
+
+    dependencies {
+        classpath "org.jetbrains.kotlin:kotlin-native-gradle-plugin:$gradlePluginVersion"
+    }
+
+    ext.konanHome = distDir.absolutePath
+    ext.jvmArgs = project.findProperty("platformLibsJvmArgs") ?: "-Xmx4G"
+    ext.setProperty("konan.home", konanHome)
+    ext.setProperty("konan.jvmArgs", jvmArgs)
+}
+
+//#region Util functions.
+private ArrayList<DefFile> targetDefFiles(KonanTarget  target) {
+    file("src/platform/${getVisibleName(target.family)}")
+            .listFiles()
+            .findAll { it.name.endsWith(".def") }
+            // The libz.a/libz.so and zlib.h are missing in raspberrypi and mips sysroots.
+            // Just workaround it until we have sysroots corrected.
+            .findAll { ! ((target instanceof KonanTarget.LINUX_ARM32_HFP ||
+                           target instanceof KonanTarget.LINUX_MIPS32 || 
+                           target instanceof KonanTarget.LINUX_MIPSEL32) && it.name == 'zlib.def') }
+            .collect { TargetDefFileKt.DefFile(it, target) }
+}
+
+private String defFileToLibName(String target, String name) {
+    return "$target-$name".toString()
+}
+//#endregion
+
+// TODO: I think most for the non-DSL language below can either be incorporated into DSL
+// or moved out of .gradle file.
+project.rootProject.ext.platformManager.enabled.each { target ->
+
+    def targetName = target.visibleName
+
+    ArrayList<Task> installTasks = []
+
+    targetDefFiles(target).each { df ->
+        def libName = defFileToLibName(targetName, df.name)
+
+        konanArtifacts {
+            interop (libName, targets: [targetName]) {
+                defFile df.file
+                artifactName df.name
+                noDefaultLibs true
+                libraries {
+                    klibs df.config.depends
+                }
+                extraOpts '--purge_user_libs'
+            }
+        }
+
+        def libTask = konanArtifacts."$libName"."$targetName"
+        libTask.dependsOn df.config.depends.collect{ defFileToLibName(targetName, it) }
+        libTask.dependsOn ":${targetName}CrossDist"
+
+        task "$libName"(type: KlibInstall) {
+            klib = libTask.artifact
+            repo = file("$konanHome/klib/platform/$targetName")
+            it.target = targetName
+            dependsOn libTask
+
+        }
+        installTasks.add(tasks[libName])
+    }
+
+    task "${targetName}Install" {
+        dependsOn installTasks
+    }
+}
+
+// TODO: Don't install libraries here - copy them in the distPlatformLibs task
+task hostInstall {
+    dependsOn tasks.withType(KlibInstall.class).findAll {
+        it.target == HostManager.hostName
+    }
+}
+
+task install {
+    dependsOn tasks.withType(KlibInstall.class)
+}
+
+
+
+

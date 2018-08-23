@@ -16,7 +16,7 @@
 
 package org.jetbrains.kotlin.backend.konan
 
-import org.jetbrains.kotlin.backend.common.validateIrModule
+import org.jetbrains.kotlin.backend.common.extensions.IrGenerationExtension
 import org.jetbrains.kotlin.backend.konan.ir.KonanSymbols
 import org.jetbrains.kotlin.backend.konan.ir.ModuleIndex
 import org.jetbrains.kotlin.backend.konan.llvm.emitLLVM
@@ -24,7 +24,8 @@ import org.jetbrains.kotlin.backend.konan.serialization.KonanSerializationUtil
 import org.jetbrains.kotlin.backend.konan.serialization.markBackingFields
 import org.jetbrains.kotlin.cli.common.messages.AnalyzerWithCompilerReport
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment
-import org.jetbrains.kotlin.config.kotlinSourceRoots
+import org.jetbrains.kotlin.config.CommonConfigurationKeys
+import org.jetbrains.kotlin.config.languageVersionSettings
 import org.jetbrains.kotlin.psi2ir.Psi2IrConfiguration
 import org.jetbrains.kotlin.psi2ir.Psi2IrTranslator
 
@@ -42,13 +43,14 @@ fun runTopLevelPhases(konanConfig: KonanConfig, environment: KotlinCoreEnvironme
         KonanPhases.list()
     }
 
-    if (config.kotlinSourceRoots.isEmpty()) return
+    if (konanConfig.infoArgsOnly) return
 
     val context = Context(konanConfig)
 
-    val analyzerWithCompilerReport = AnalyzerWithCompilerReport(context.messageCollector)
+    val analyzerWithCompilerReport = AnalyzerWithCompilerReport(context.messageCollector,
+            environment.configuration.languageVersionSettings)
 
-    val phaser = PhaseManager(context)
+    val phaser = PhaseManager(context, null)
 
     phaser.phase(KonanPhase.FRONTEND) {
         // Build AST and binding info.
@@ -65,34 +67,44 @@ fun runTopLevelPhases(konanConfig: KonanConfig, environment: KotlinCoreEnvironme
 
     phaser.phase(KonanPhase.PSI_TO_IR) {
         // Translate AST to high level IR.
-        val translator = Psi2IrTranslator(Psi2IrConfiguration(false))
+        val translator = Psi2IrTranslator(context.config.configuration.languageVersionSettings,
+                Psi2IrConfiguration(false))
         val generatorContext = translator.createGeneratorContext(context.moduleDescriptor, bindingContext)
+        @Suppress("DEPRECATION")
         context.psi2IrGeneratorContext = generatorContext
 
-        val symbols = KonanSymbols(context, generatorContext.symbolTable)
+        val symbols = KonanSymbols(context, generatorContext.symbolTable, generatorContext.symbolTable.lazyWrapper)
 
         val module = translator.generateModuleFragment(generatorContext, environment.getSourceFiles())
 
         context.irModule = module
         context.ir.symbols = symbols
 
-        validateIrModule(context, module)
+//        validateIrModule(context, module)
+    }
+    phaser.phase(KonanPhase.IR_GENERATOR_PLUGINS) {
+        val extensions = IrGenerationExtension.getInstances(context.config.project)
+        extensions.forEach { extension ->
+            context.irModule!!.files.forEach { irFile -> extension.generate(irFile, context, bindingContext) }
+        }
+    }
+    phaser.phase(KonanPhase.GEN_SYNTHETIC_FIELDS) {
+        markBackingFields(context)
     }
     phaser.phase(KonanPhase.SERIALIZER) {
-        markBackingFields(context)
-        val serializer = KonanSerializationUtil(context)
-        context.serializedLinkData = 
+        val serializer = KonanSerializationUtil(context, context.config.configuration.get(CommonConfigurationKeys.METADATA_VERSION)!!)
+        context.serializedLinkData =
             serializer.serializeModule(context.moduleDescriptor)
     }
     phaser.phase(KonanPhase.BACKEND) {
         phaser.phase(KonanPhase.LOWER) {
-            KonanLower(context).lower()
-            validateIrModule(context, context.ir.irModule)
+            KonanLower(context, phaser).lower()
+//            validateIrModule(context, context.ir.irModule) // Temporarily disabled until moving to new IR finished.
             context.ir.moduleIndexForCodegen = ModuleIndex(context.ir.irModule)
         }
         phaser.phase(KonanPhase.BITCODE) {
-            emitLLVM(context)
-            produceOutput(context)
+            emitLLVM(context, phaser)
+            produceOutput(context, phaser)
         }
         // We always verify bitcode to prevent hard to debug bugs.
         context.verifyBitCode()
@@ -103,7 +115,7 @@ fun runTopLevelPhases(konanConfig: KonanConfig, environment: KotlinCoreEnvironme
     }
 
     phaser.phase(KonanPhase.LINK_STAGE) {
-        LinkStage(context).linkStage()
+        LinkStage(context, phaser).linkStage()
     }
 }
 

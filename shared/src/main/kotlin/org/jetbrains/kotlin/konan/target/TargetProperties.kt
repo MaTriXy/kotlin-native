@@ -19,19 +19,19 @@ package org.jetbrains.kotlin.konan.properties
 import org.jetbrains.kotlin.konan.target.*
 
 fun Properties.hostString(name: String): String?
-    = this.propertyString(name, TargetManager.host.detailedName)
+    = this.propertyString(name, HostManager.hostName)
 
 fun Properties.hostList(name: String): List<String>
-    = this.propertyList(name, TargetManager.host.detailedName)
+    = this.propertyList(name, HostManager.hostName)
 
 fun Properties.targetString(name: String, target: KonanTarget): String?
-    = this.propertyString(name, target.detailedName)
+    = this.propertyString(name, target.name)
 
 fun Properties.targetList(name: String, target: KonanTarget): List<String>
-    = this.propertyList(name, target.detailedName)
+    = this.propertyList(name, target.name)
 
 fun Properties.hostTargetString(name: String, target: KonanTarget): String?
-    = this.propertyString(name, hostTargetSuffix(TargetManager.host, target))
+    = this.propertyString(name, hostTargetSuffix(HostManager.host, target))
 
 fun Properties.hostTargetList(name: String, target: KonanTarget): List<String>
-    = this.propertyList(name, hostTargetSuffix(TargetManager.host, target))
+    = this.propertyList(name, hostTargetSuffix(HostManager.host, target))

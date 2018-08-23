@@ -1,11 +1,30 @@
-# iOS calculator sample
+# Calculator sample
 
-This example shows how to use Kotlin library compiled to framework from
-an existing iOS project (e.g. written in Swift or Objective-C).
+This example shows how to use Kotlin common module (located in [common/](common/)) in different environments.
+Currently for
+* Android (see [android](android/))
+* iOS (see [ios/calculator](ios/calculator/))
+* plain JVM (cli) (see [jvm](jvm/))
 
-To build and run the sample do the following:
+## Common
 
-1.  Open `samples/calculator/calculator.xcodeproj` with Xcode.
+Common Kotlin module contains arithmetic expressions parser.
+
+## Android App
+The common module may be used in an Android application.
+
+To build and run the Android sample do the following:
+
+1.  Open the project in Android Studio 3.1
+2.  Create a new Android App configuration. Choose module `android`.
+3.  Now build and run the configuration created.
+
+## iOS
+The iOS project compiles Kotlin module to a framework (see [ios](ios/)). The framework can be easily included in an existing iOS project (e.g. written in Swift or Objective-C)
+
+To build and run the iOS sample do the following:
+
+1.  Open `ios/calculator.xcodeproj` with Xcode.
 2.  Open the project's target through project navigator, go to tab 'General'.
     In 'Identity' section change the bundle ID to the unique string in
     reverse-DNS format. Then select the team in 'Signing' section.
@@ -13,15 +32,23 @@ To build and run the sample do the following:
     See the
     [Xcode documentation](https://developer.apple.com/library/content/documentation/IDEs/Conceptual/AppDistributionGuide/ConfiguringYourApp/ConfiguringYourApp.html#//apple_ref/doc/uid/TP40012582-CH28-SW2)
     for more info.
-3.  Now build and run the application on a connected iPhone with Xcode.
+3.  Now build and run the application with Xcode.
 
-The sample consists of:
+The iOS application is written in Swift. It uses Kotlin module as a library.
+Kotlin module is built into Objective-C framework by invoking Gradle
+from custom "Run Script" build phase, and this framework is imported into
+the Xcode project.
 
-1.  Xcode iOS application project, written in Swift. It uses Kotlin library to
-    parse simple arithmetic expressions.
-2.  Kotlin library source code and build script. It is built into Objective-C
-    framework by invoking Gradle from custom "Run Script" build phase, and this
-    framework is imported into the Xcode project.
+## Plain JVM
+The common module can also be used in JVM application built by Kotlin/JVM compiler with Gradle.
+To build and run it, go to [jvm](jvm/) directory and use
+```
+../gradlew run
+```
 
-    The library can also be compiled to a `.jar` by Kotlin/JVM compiler with
-    Gradle.
+To build the distribution:
+```
+../gradlew distZip
+```
+(the result will be available as
+`jvm/build/distributions/KotlinCalculator.zip`)

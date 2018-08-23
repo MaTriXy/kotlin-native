@@ -14,8 +14,19 @@
  * limitations under the License.
  */
 
+buildscript {
+    ext.rootBuildDirectory = "$rootDir/.."
+    apply from: "$rootBuildDirectory/gradle/loadRootProperties.gradle"
+    apply from: "$rootBuildDirectory/gradle/kotlinGradlePlugin.gradle"
+}
+
 allprojects {
     repositories {
-        mavenCentral()
+        maven {
+            url buildKotlinCompilerRepo
+        }
+        maven {
+            url 'https://cache-redirector.jetbrains.com/maven-central'
+        }
     }
 }

@@ -33,7 +33,7 @@
 #endif
 #endif // OMIT_BACKTRACE
 
-#include "Assert.h"
+#include "KAssert.h"
 #include "Exceptions.h"
 #include "ExecFormat.h"
 #include "Memory.h"
@@ -63,14 +63,14 @@ struct Backtrace {
     auto result = AllocArrayInstance(
         theArrayTypeInfo, count - skipCount, arrayHolder.slot());
     // TODO: throw cached OOME?
-    RuntimeAssert(result != nullptr, "Cannot create backtrace array");
+    RuntimeCheck(result != nullptr, "Cannot create backtrace array");
   }
 
   void setNextElement(const char* element) {
     auto result = CreateStringFromCString(
       element, ArrayAddressOfElementAt(obj()->array(), index++));
     // TODO: throw cached OOME?
-    RuntimeAssert(result != nullptr, "Cannot create backtrace array element");
+    RuntimeCheck(result != nullptr, "Cannot create backtrace array element");
   }
 
   ObjHeader* obj() { return arrayHolder.obj(); }
@@ -117,9 +117,7 @@ _Unwind_Reason_Code unwindCallback(
 
 }  // namespace
 
-#ifdef __cplusplus
 extern "C" {
-#endif
 
 // TODO: this implementation is just a hack, e.g. the result is inexact;
 // however it is better to have an inexact stacktrace than not to have any.
@@ -146,7 +144,7 @@ OBJ_GETTER0(GetCurrentStackTrace) {
 
   int size = backtrace(buffer, maxSize);
   char** symbols = backtrace_symbols(buffer, size);
-  RuntimeAssert(symbols != nullptr, "Not enough memory to retrieve the stacktrace");
+  RuntimeCheck(symbols != nullptr, "Not enough memory to retrieve the stacktrace");
   if (size < kSkipFrames)
       return AllocArrayInstance(theArrayTypeInfo, 0, OBJ_RESULT);
   AutoFree autoFree(symbols);
@@ -168,7 +166,7 @@ void ThrowException(KRef exception) {
                 "Throwing something non-throwable");
 #if KONAN_NO_EXCEPTIONS
   PrintThrowable(exception);
-  RuntimeAssert(false, "Exceptions unsupported");
+  RuntimeCheck(false, "Exceptions unsupported");
 #else
   throw ObjHolder(exception);
 #endif
@@ -219,6 +217,4 @@ void SetKonanTerminateHandler() {
 
 #endif // KONAN_OBJC_INTEROP
 
-#ifdef __cplusplus
 } // extern "C"
-#endif

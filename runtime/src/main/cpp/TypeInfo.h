@@ -42,16 +42,57 @@ struct FieldTableRecord {
     int fieldOffset_;
 };
 
+// Type for runtime representation of Konan object.
+// Keep in sync with runtimeTypeMap in RTTIGenerator.
+enum Konan_RuntimeType {
+  RT_INVALID = 0,
+  RT_OBJECT = 1,
+  RT_INT8 = 2,
+  RT_INT16 = 3,
+  RT_INT32 = 4,
+  RT_INT64 = 5,
+  RT_FLOAT32 = 6,
+  RT_FLOAT64 = 7,
+  RT_NATIVE_PTR = 8,
+  RT_BOOLEAN = 9
+};
+
+enum Konan_TypeFlags {
+  TF_IMMUTABLE = 1 << 0
+};
+
+enum Konan_MetaFlags {
+  MF_NEVER_FROZEN = 1 << 0
+};
+
+// Extended information about a type.
+struct ExtendedTypeInfo {
+  // Number of fields (negated Konan_RuntimeType for array types).
+  int32_t fieldsCount_;
+  // Offsets of all fields.
+  const int32_t* fieldOffsets_;
+  // Types of all fields.
+  const uint8_t* fieldTypes_;
+  // Names of all fields.
+  const char** fieldNames_;
+  // TODO: do we want any other info here?
+};
+
 // This struct represents runtime type information and by itself is the compile time
 // constant.
 struct TypeInfo {
+    // Reference to self, to allow simple obtaining TypeInfo via meta-object.
+    const TypeInfo* typeInfo_;
+    // Hash of class name.
     ClassNameHash name_;
     // Negative value marks array class/string, and it is negated element size.
     int32_t instanceSize_;
     // Must be pointer to Any for array classes, and null for Any.
     const TypeInfo* superType_;
-    // All object references inside this object.
+    // All object reference fields inside this object.
     const int32_t* objOffsets_;
+    // Count of object reference fields inside this object.
+    // 1 for kotlin.Array to mark it as non-leaf.
     int32_t objOffsetsCount_;
     const TypeInfo* const* implementedInterfaces_;
     int32_t implementedInterfacesCount_;
@@ -70,6 +111,12 @@ struct TypeInfo {
     // (e.g. TopLevel.Nested1.Nested2), or simple class name if it is local,
     // or `null` if the class is anonymous.
     ObjHeader* relativeName_;
+
+    // Various flags.
+    int32_t flags_;
+
+    // Extended RTTI.
+    const ExtendedTypeInfo* extendedInfo_;
 
 #if KONAN_TYPE_INFO_HAS_WRITABLE_PART
     WritableTypeInfo* writableInfo_;

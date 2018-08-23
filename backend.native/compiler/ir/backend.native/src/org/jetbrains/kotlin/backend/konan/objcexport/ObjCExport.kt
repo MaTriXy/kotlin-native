@@ -16,35 +16,71 @@
 
 package org.jetbrains.kotlin.backend.konan.objcexport
 
-import org.jetbrains.kotlin.backend.konan.Context
 import org.jetbrains.kotlin.backend.konan.descriptors.getPackageFragments
+import org.jetbrains.kotlin.backend.konan.isNativeBinary
 import org.jetbrains.kotlin.backend.konan.llvm.CodeGenerator
 import org.jetbrains.kotlin.backend.konan.llvm.objcexport.ObjCExportCodeGenerator
+import org.jetbrains.kotlin.descriptors.CallableMemberDescriptor
+import org.jetbrains.kotlin.descriptors.ClassDescriptor
 import org.jetbrains.kotlin.descriptors.ModuleDescriptor
 import org.jetbrains.kotlin.konan.file.File
 import org.jetbrains.kotlin.konan.target.CompilerOutputKind
 import org.jetbrains.kotlin.konan.target.KonanTarget
+import org.jetbrains.kotlin.konan.target.Family
+import org.jetbrains.kotlin.konan.target.AppleConfigurables
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.name.isSubpackageOf
 
-internal class ObjCExport(val context: Context) {
+internal class ObjCExport(val codegen: CodeGenerator) {
+    val context get() = codegen.context
 
-    private val target get() = context.config.targetManager.target
+    private val target get() = context.config.target
 
-    internal fun produceObjCFramework() {
-        if (context.config.produce != CompilerOutputKind.FRAMEWORK) return
+    internal fun produce() {
+        if (target.family != Family.IOS && target.family != Family.OSX) return
 
-        val headerGenerator = ObjCExportHeaderGenerator(context)
+        if (!context.config.produce.isNativeBinary) return // TODO: emit RTTI to the same modules as classes belong to.
+
+        val objCCodeGenerator: ObjCExportCodeGenerator
+        val generatedClasses: Set<ClassDescriptor>
+        val topLevelDeclarations: Map<FqName, List<CallableMemberDescriptor>>
+
+        if (context.config.produce == CompilerOutputKind.FRAMEWORK) {
+            val headerGenerator = ObjCExportHeaderGeneratorImpl(context)
+            produceFrameworkSpecific(headerGenerator)
+
+            generatedClasses = headerGenerator.generatedClasses
+            topLevelDeclarations = headerGenerator.topLevel
+            objCCodeGenerator = ObjCExportCodeGenerator(codegen, headerGenerator.namer, headerGenerator.mapper)
+        } else {
+            // TODO: refactor ObjCExport* to handle this case on a general basis.
+            val mapper = object : ObjCExportMapper() {
+                override fun getCategoryMembersFor(descriptor: ClassDescriptor): List<CallableMemberDescriptor> =
+                        emptyList()
+
+                override fun isSpecialMapped(descriptor: ClassDescriptor): Boolean =
+                        error("shouldn't reach here")
+
+            }
+
+            val namer = ObjCExportNamer(context.moduleDescriptor, context.builtIns, mapper)
+            objCCodeGenerator = ObjCExportCodeGenerator(codegen, namer, mapper)
+
+            generatedClasses = emptySet()
+            topLevelDeclarations = emptyMap()
+        }
+
+        objCCodeGenerator.emitRtti(generatedClasses = generatedClasses, topLevel = topLevelDeclarations)
+    }
+
+    private fun produceFrameworkSpecific(headerGenerator: ObjCExportHeaderGenerator) {
         headerGenerator.translateModule()
 
-        val namer = headerGenerator.namer
-        val mapper = headerGenerator.mapper
-
         val framework = File(context.config.outputFile)
-        val frameworkContents = when (target) {
-            KonanTarget.IPHONE, KonanTarget.IPHONE_SIM -> framework
-            KonanTarget.MACBOOK -> framework.child("Versions/A")
+        val frameworkContents = when(target.family) {
+            Family.IOS -> framework
+            Family.OSX -> framework.child("Versions/A")
             else -> error(target)
         }
 
@@ -72,37 +108,33 @@ internal class ObjCExport(val context: Context) {
 
         emitInfoPlist(frameworkContents, frameworkName)
 
-        if (target == KonanTarget.MACBOOK) {
+        if (target == KonanTarget.MACOS_X64) {
             framework.child("Versions/Current").createAsSymlink("A")
             for (child in listOf(frameworkName, "Headers", "Modules", "Resources")) {
                 framework.child(child).createAsSymlink("Versions/Current/$child")
             }
         }
-
-        val objCCodeGenerator = ObjCExportCodeGenerator(CodeGenerator(context), namer, mapper)
-        objCCodeGenerator.emitRtti(headerGenerator.generatedClasses, headerGenerator.topLevel)
     }
 
     private fun emitInfoPlist(frameworkContents: File, name: String) {
-        val directory = when (target) {
-            KonanTarget.IPHONE,
-            KonanTarget.IPHONE_SIM -> frameworkContents
-            KonanTarget.MACBOOK -> frameworkContents.child("Resources").also { it.mkdirs() }
+        val directory = when {
+            target.family == Family.IOS -> frameworkContents
+            target == KonanTarget.MACOS_X64 -> frameworkContents.child("Resources").also { it.mkdirs() }
             else -> error(target)
         }
 
         val file = directory.child("Info.plist")
-        val bundleExecutable = name
         val pkg = context.moduleDescriptor.guessMainPackage() // TODO: consider showing warning if it is root.
         val bundleId = pkg.child(Name.identifier(name)).asString()
 
         val platform = when (target) {
-            KonanTarget.IPHONE -> "iPhoneOS"
-            KonanTarget.IPHONE_SIM -> "iPhoneSimulator"
-            KonanTarget.MACBOOK -> "MacOSX"
+            KonanTarget.IOS_ARM32, KonanTarget.IOS_ARM64 -> "iPhoneOS"
+            KonanTarget.IOS_X64 -> "iPhoneSimulator"
+            KonanTarget.MACOS_X64 -> "MacOSX"
             else -> error(target)
         }
-        val minimumOsVersion = context.config.distribution.targetProperties.osVersionMin!!
+        val properties = context.config.platform.configurables as AppleConfigurables
+        val minimumOsVersion = properties.osVersionMin
 
         val contents = StringBuilder()
         contents.append("""
@@ -111,7 +143,7 @@ internal class ObjCExport(val context: Context) {
             <plist version="1.0">
             <dict>
                 <key>CFBundleExecutable</key>
-                <string>$bundleExecutable</string>
+                <string>$name</string>
                 <key>CFBundleIdentifier</key>
                 <string>$bundleId</string>
                 <key>CFBundleInfoDictionaryVersion</key>
@@ -132,9 +164,8 @@ internal class ObjCExport(val context: Context) {
         """.trimIndent())
 
 
-        contents.append(when (target) {
-            KonanTarget.IPHONE,
-            KonanTarget.IPHONE_SIM -> """
+        contents.append(when (target.family) {
+            Family.IOS -> """
                 |    <key>MinimumOSVersion</key>
                 |    <string>$minimumOsVersion</string>
                 |    <key>UIDeviceFamily</key>
@@ -144,15 +175,26 @@ internal class ObjCExport(val context: Context) {
                 |    </array>
 
                 """.trimMargin()
-            KonanTarget.MACBOOK -> ""
+            Family.OSX -> ""
             else -> error(target)
         })
 
-        if (target == KonanTarget.IPHONE) {
+        if (target == KonanTarget.IOS_ARM64) {
             contents.append("""
                 |    <key>UIRequiredDeviceCapabilities</key>
                 |    <array>
                 |        <string>arm64</string>
+                |    </array>
+
+                """.trimMargin()
+            )
+        }
+
+        if (target == KonanTarget.IOS_ARM32) {
+            contents.append("""
+                |    <key>UIRequiredDeviceCapabilities</key>
+                |    <array>
+                |        <string>armv7</string>
                 |    </array>
 
                 """.trimMargin()

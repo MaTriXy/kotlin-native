@@ -1,6 +1,82 @@
+## v0.8 (Jul 2018)
+  * Singleton objects are frozen after creation, and shared between threads
+  * String and primitives types are frozen by default
+  * Common stdlib with Kotlin/JVM and Kotlin/JS
+  * Implemented `kotlin.random.*` and `Collection.shuffle`
+  * Implemented atomic integers and atomic references
+  * Multiple bugfixes in compiler (coroutines, inliner)
+  * Support 32-bit iOS (target `ios_arm32`)
+  * New experimental Gradle plugin
+  * Support XCode 9.4.1
+  * Optimizations (switch by enum, memory management)
+
+## v0.7.1 (Jun 2018)
+  * Bugfixes in the runtime (indexOf, GC for kotlin.Array, enum equality) and the compiler
+  * Fix NSBlock problem, preventing upload of binaries to the AppStore
+  * Create primitive type boxes and kotlin.String as frozen by default
+  * Support Gradle 4.7, provide separate run task for each executable
+  * Support XCode 9.4 and CoreML and ClassKit frameworks on Apple platforms
+  * Improved runtime Kotlin variable examination
+  * Minor performance optimizations in compiled code and runtime
+  * Add `disableDesignatedInitializerChecks` definition file support
+
+## v0.7 (May 2018)
+  * Interop with Objective-C/Swift changes:
+     * Uniform direct and reverse interops (values could be passed in both directions now)
+     * Interop by exceptions
+     * Type conversion and checks (`as`, `is`) for interop types
+     * Seamless interop on numbers, strings, lists, maps and sets
+     * Better interop on constructors and initializers
+  * Switched to Xcode 9.3 on Apple platforms
+  * Introduced object freezing API, frozen object could be used from multiple threads
+  * Kotlin enums are frozen by default
+  * Switch to Gradle 4.6
+  * Use Gradle native dependency model, allowing to use `.klib` as Maven artifacts
+  * Introduced typed arrays API
+  * Introduced weak references API
+  * Activated global devirtualization analysis
+  * Performance improvements (box caching, bridge inlining, others)
+
+## v0.6.2 (Mar 2018)
+  * Support several `expectedBy`-dependencies in Gradle plugin.
+  * Improved interaction between Gradle plugin and IDE.
+  * Various bugfixes
+
+## v0.6.1 (Mar 2018)
+  * Various bugfixes
+  * Support total ordering in FP comparisons
+  * Interop generates string constants from string macrodefinitions
+  * STM32 blinky demo in pure Kotlin/Native
+  * Top level variables initialization redesign (proper dependency order)
+  * Support kotlin.math on WebAssembly targets
+  * Support embedded targets on Windows hosts
+
+## v0.6 (Feb 2018)
+  * Support multiplatform projects (expect/actual) in compiler and Gradle plugin
+  * Support first embedded target (STM32 board)
+  * Support Kotlin 1.2.20
+  * Support Java 9
+  * Support Gradle 4.5
+  * Transparent Objective-C/Kotlin container classes interoperability
+  * Produce optimized WebAssembly binaries (10x smaller than it used to be)
+  * Improved APIs for object transfer between threads and workers
+  * Allow exporting top level C function in reverse interop with @CName annotation
+  * Supported debugging of code with inline functions
+  * Multiple bugfixes and performance optimizations
+
+## v0.5 (Dec 2017)
+  * Reverse interop allowing to call Kotlin/Native code compiled as framework from Objective-C/Swift programs
+  * Reverse interop allowing to call Kotlin/Native code compiled as shared object from C/C++ programs
+  * Support generation of shared objects and DLLs by the compiler
+  * Migration to LLVM 5.0
+  * Support WebAssembly target on Linux and Windows hosts
+  * Make string conversions more robust
+  * Support kotlin.math package
+  * Refine workers and string conversion APIs
+
 ## v0.4 (Nov 2017) ##
-  * Objective-C frameworks interop for iOS and OSX targets
-  * Platform API libraries for Linux, iOS, OSX and Windows
+  * Objective-C frameworks interop for iOS and macOS targets
+  * Platform API libraries for Linux, iOS, macOS and Windows
   * Kotlin 1.2 supported
   * `val` and function parameters can be inspected in debugger
   * Experimental support for WebAssembly (wasm32 target)

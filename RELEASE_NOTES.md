@@ -20,25 +20,28 @@ basic runtime shipped along with the translator, we only support a subset of all
 target platforms. Currently _Kotlin/Native_ is being shipped and tested with support for
 the following platforms:
 
- * Mac OS X 10.11 and later (x86-64), host and target (`-target macbook`, default on OSX hosts)
+ * Mac OS X 10.11 and later (x86-64), host and target (`-target macos`, default on macOS hosts)
  * Ubuntu Linux x86-64 (14.04, 16.04 and later), other Linux flavours may work as well, host and target
    (`-target linux`, default on Linux hosts)
  * Microsoft Windows x86-64 (tested on Windows 7 and Windows 10), host and target (`-target mingw`,
    default on Windows hosts)
- * Apple iOS (arm64), cross-compiled target (`-target iphone`), hosted on OS X
+ * Apple iOS (armv7 and arm64 devices, x86 simulator), cross-compiled target
+   (`-target ios_arm32|ios_arm64|ios_x64`), hosted on macOS
  * Linux arm32 hardfp, Raspberry Pi, cross-compiled target (`-target raspberrypi`), hosted on Linux
- * Linux mips big endian, cross-compiled target (`-target mips`), hosted on Linux
- * Linux mips little endian, cross-compiled target (`-target mipsel`), hosted on Linux
- * Android arm32 and arm64 (`-target android_arm32` and `-target android_arm64`), target, hosted on Linux or OS X
+ * Linux MIPS big endian, cross-compiled target (`-target mips`), hosted on Linux
+ * Linux MIPS little endian, cross-compiled target (`-target mipsel`), hosted on Linux
+ * Android arm32 and arm64 (`-target android_arm32|android_arm64`) target, hosted on Linux or macOS
+ * WebAssembly (`-target wasm32`) target, hosted on Linux, Windows or macOS
 
  Adding support for other target platforms shouldn't be too hard, if LLVM support is available.
 
  ## Compatibility and features ##
 
-To run _Kotlin/Native_ JDK8 for the host platform has to be installed.
-Note that Java 9 not yet supported.
+To run _Kotlin/Native_ JDK 8 or Java 9 (JDK) for the host platform has to be installed.
 
-The language and library version supported by this EAP release mostly match Kotlin 1.2.
+On macOS it also requires Xcode 9.4.1 or newer to be installed.
+
+The language and library version supported by this EAP release mostly match Kotlin 1.2.60.
 However, there are certain limitations, see section [Known Limitations](#limitations).
 
  Currently _Kotlin/Native_ uses reference counting based memory management scheme with a cycle
@@ -76,6 +79,8 @@ for benchmarking and competitive analysis of any kind.
 missing functionality. Note, that standard Java APIs, such as `java.lang.Math` or `java.io`
 is not available in current _Kotlin_ standard library, but using C interoperability, one could
 call similar APIs from the POSIX library, see this [`sample`](https://github.com/JetBrains/kotlin-native/blob/master/samples/csvparser).
+  Also Kotlin/Native standard library contains certain native-specific extensions, mostly around
+memory management and concurrency.
 
 ### Reflection ###
 
@@ -90,10 +95,10 @@ Notice that property delegation (including lazy properties) *does* work.
 
  _Kotlin/Native_ supports preliminary source-level debugging on produced executables with `lldb` debugger.
  Produce your binary with debugging information by specifying `-g` _Kotlin/Native_ compiler switch.
- Konan plugin accepts `enableDebug` project's property, allowing two options for producing binaries with debug
+ Konan plugin accepts `enableDebug` project's property, allowing two ways of producing binaries with the debug
  information:
-   - gradle DSL.
-   - argument `-PenableDebug=true` in gradle command line.
+   - Gradle DSL
+   - argument `-PenableDebug=true` in Gradle command line
 
  Start your application with
     
@@ -101,6 +106,7 @@ Notice that property delegation (including lazy properties) *does* work.
  
  and then 
     
+    command script import tools/konan_lldb.py
     b kfun:main(kotlin.Array<kotlin.String>)
 
 to set breakpoint in main function of your application. Single stepping and step into shall work, 
