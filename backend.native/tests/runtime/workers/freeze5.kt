@@ -1,6 +1,12 @@
+/*
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE file.
+ */
+
 package runtime.workers.freeze5
 
 import kotlin.test.*
+
 object Keys {
     internal val myMap: Map<String, List<String>> = mapOf(
             "val1" to listOf("a1", "a2", "a3"),

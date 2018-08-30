@@ -1,17 +1,6 @@
 /*
- * Copyright 2010-2018 JetBrains s.r.o.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE file.
  */
 
 package org.jetbrains.kotlin.serialization
@@ -50,7 +39,6 @@ import org.jetbrains.kotlin.resolve.constants.StringValue
 import org.jetbrains.kotlin.serialization.deserialization.ProtoEnumFlags
 import org.jetbrains.kotlin.types.*
 import org.jetbrains.kotlin.types.typeUtil.contains
-import org.jetbrains.kotlin.metadata.serialization.*
 import org.jetbrains.kotlin.resolve.calls.components.isActualParameterWithAnyExpectedDefault
 import java.io.ByteArrayOutputStream
 import java.util.*
@@ -161,10 +149,7 @@ class KonanDescriptorSerializer private constructor(
             builder.typeTable = typeTableProto
         }
 
-        val requirement = serializeVersionRequirements(classDescriptor)
-        if (requirement != null) {
-            builder.addAllVersionRequirement(requirement)
-        }
+        builder.addAllVersionRequirement(serializeVersionRequirements(classDescriptor))
 
         val versionRequirementTableProto = versionRequirementTable.serialize()
         if (versionRequirementTableProto != null) {
@@ -255,11 +240,9 @@ class KonanDescriptorSerializer private constructor(
             }
         }
 
-        val requirement = serializeVersionRequirements(descriptor)
-        if (requirement != null) {
-            builder.addAllVersionRequirement(requirement)
-        }
-        else if (descriptor.isSuspendOrHasSuspendTypesInSignature()) {
+        builder.addAllVersionRequirement(serializeVersionRequirements(descriptor))
+
+        if (descriptor.isSuspendOrHasSuspendTypesInSignature()) {
             builder.addVersionRequirement(writeVersionRequirementDependingOnCoroutinesVersion())
         }
 
@@ -338,11 +321,9 @@ class KonanDescriptorSerializer private constructor(
             }
         }
 
-        val requirement = serializeVersionRequirements(descriptor)
-        if (requirement != null) {
-            builder.addAllVersionRequirement(requirement)
-        }
-        else if (descriptor.isSuspendOrHasSuspendTypesInSignature()) {
+        builder.addAllVersionRequirement(serializeVersionRequirements(descriptor))
+
+        if (descriptor.isSuspendOrHasSuspendTypesInSignature()) {
             builder.addVersionRequirement(writeVersionRequirementDependingOnCoroutinesVersion())
         }
 
@@ -376,11 +357,9 @@ class KonanDescriptorSerializer private constructor(
             builder.addValueParameter(local.valueParameter(valueParameterDescriptor))
         }
 
-        val requirement = serializeVersionRequirements(descriptor)
-        if (requirement != null) {
-            builder.addAllVersionRequirement(requirement)
-        }
-        else if (descriptor.isSuspendOrHasSuspendTypesInSignature()) {
+        builder.addAllVersionRequirement(serializeVersionRequirements(descriptor))
+
+        if (descriptor.isSuspendOrHasSuspendTypesInSignature()) {
             builder.addVersionRequirement(writeVersionRequirementDependingOnCoroutinesVersion())
         }
 
@@ -436,10 +415,7 @@ class KonanDescriptorSerializer private constructor(
             builder.setExpandedType(local.type(expandedType))
         }
 
-        val requirement = serializeVersionRequirements(descriptor)
-        if (requirement != null) {
-            builder.addVersionRequirement(writeVersionRequirementDependingOnCoroutinesVersion())
-        }
+        builder.addVersionRequirement(writeVersionRequirementDependingOnCoroutinesVersion())
 
         builder.addAllAnnotation(descriptor.annotations.map { extension.annotationSerializer.serializeAnnotation(it) })
 

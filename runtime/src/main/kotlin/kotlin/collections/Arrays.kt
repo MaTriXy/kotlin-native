@@ -1,17 +1,6 @@
 /*
- * Copyright 2010-2018 JetBrains s.r.o.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE file.
  */
 
 package kotlin.collections
@@ -517,94 +506,6 @@ public actual fun LongArray.contentToString(): String {
 /**
  * Returns a string representation of the contents of the specified array as if it is [List].
  */
-@SinceKotlin("1.3")
-@ExperimentalUnsignedTypes
-public fun UByteArray.contentToString(): String {
-    if (size == 0)
-        return "[]"
-    val iMax = size - 1
-
-    val b = StringBuilder()
-    b.append('[')
-    var i = 0
-    while (true) {
-        b.append(this[i])
-        if (i == iMax)
-            return b.append(']').toString()
-        b.append(", ")
-        i++
-    }
-}
-
-/**
- * Returns a string representation of the contents of the specified array as if it is [List].
- */
-@SinceKotlin("1.3")
-@ExperimentalUnsignedTypes
-public fun UShortArray.contentToString(): String {
-    if (size == 0)
-        return "[]"
-    val iMax = size - 1
-
-    val b = StringBuilder()
-    b.append('[')
-    var i = 0
-    while (true) {
-        b.append(this[i])
-        if (i == iMax)
-            return b.append(']').toString()
-        b.append(", ")
-        i++
-    }
-}
-
-/**
- * Returns a string representation of the contents of the specified array as if it is [List].
- */
-@SinceKotlin("1.3")
-@ExperimentalUnsignedTypes
-public fun UIntArray.contentToString(): String {
-    if (size == 0)
-        return "[]"
-    val iMax = size - 1
-
-    val b = StringBuilder()
-    b.append('[')
-    var i = 0
-    while (true) {
-        b.append(this[i])
-        if (i == iMax)
-            return b.append(']').toString()
-        b.append(", ")
-        i++
-    }
-}
-
-/**
- * Returns a string representation of the contents of the specified array as if it is [List].
- */
-@SinceKotlin("1.3")
-@ExperimentalUnsignedTypes
-public fun ULongArray.contentToString(): String {
-    if (size == 0)
-        return "[]"
-    val iMax = size - 1
-
-    val b = StringBuilder()
-    b.append('[')
-    var i = 0
-    while (true) {
-        b.append(this[i])
-        if (i == iMax)
-            return b.append(']').toString()
-        b.append(", ")
-        i++
-    }
-}
-
-/**
- * Returns a string representation of the contents of the specified array as if it is [List].
- */
 @SinceKotlin("1.1")
 public actual fun FloatArray.contentToString(): String {
     if (size == 0)
@@ -1054,54 +955,6 @@ public actual fun IntArray.contentHashCode(): Int {
  */
 @SinceKotlin("1.1")
 public actual fun LongArray.contentHashCode(): Int {
-    var result = 1
-    for (element in this)
-        result = 31 * result  + element.hashCode()
-    return result
-}
-
-/**
- * Returns a hash code based on the contents of this array as if it is [List].
- */
-@SinceKotlin("1.3")
-@ExperimentalUnsignedTypes
-public fun UByteArray.contentHashCode(): Int {
-    var result = 1
-    for (element in this)
-        result = 31 * result  + element.hashCode()
-    return result
-}
-
-/**
- * Returns a hash code based on the contents of this array as if it is [List].
- */
-@SinceKotlin("1.3")
-@ExperimentalUnsignedTypes
-public fun UShortArray.contentHashCode(): Int {
-    var result = 1
-    for (element in this)
-        result = 31 * result  + element.hashCode()
-    return result
-}
-
-/**
- * Returns a hash code based on the contents of this array as if it is [List].
- */
-@SinceKotlin("1.3")
-@ExperimentalUnsignedTypes
-public fun UIntArray.contentHashCode(): Int {
-    var result = 1
-    for (element in this)
-        result = 31 * result  + element.hashCode()
-    return result
-}
-
-/**
- * Returns a hash code based on the contents of this array as if it is [List].
- */
-@SinceKotlin("1.3")
-@ExperimentalUnsignedTypes
-public fun ULongArray.contentHashCode(): Int {
     var result = 1
     for (element in this)
         result = 31 * result  + element.hashCode()

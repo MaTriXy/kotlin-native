@@ -1,17 +1,6 @@
 /*
- * Copyright 2010-2017 JetBrains s.r.o.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE file.
  */
 
 package org.jetbrains.kotlin.backend.konan.llvm
@@ -26,14 +15,17 @@ import org.jetbrains.kotlin.backend.konan.ir.*
 import org.jetbrains.kotlin.backend.konan.irasdescriptors.*
 import org.jetbrains.kotlin.backend.konan.objcexport.ObjCExport
 import org.jetbrains.kotlin.backend.konan.optimizations.*
+import org.jetbrains.kotlin.builtins.KotlinBuiltIns
 import org.jetbrains.kotlin.builtins.UnsignedType
 import org.jetbrains.kotlin.descriptors.ClassKind
 import org.jetbrains.kotlin.descriptors.Modality
+import org.jetbrains.kotlin.descriptors.PropertyDescriptor
 import org.jetbrains.kotlin.descriptors.konan.CurrentKonanModuleOrigin
 import org.jetbrains.kotlin.ir.IrElement
 import org.jetbrains.kotlin.ir.IrStatement
 import org.jetbrains.kotlin.ir.SourceManager
 import org.jetbrains.kotlin.ir.declarations.*
+import org.jetbrains.kotlin.ir.descriptors.IrPropertyDelegateDescriptor
 import org.jetbrains.kotlin.ir.expressions.*
 import org.jetbrains.kotlin.ir.expressions.impl.IrReturnableBlockImpl
 import org.jetbrains.kotlin.ir.symbols.*
@@ -49,12 +41,41 @@ import org.jetbrains.kotlin.resolve.descriptorUtil.classId
 import org.jetbrains.kotlin.resolve.descriptorUtil.fqNameUnsafe
 
 private val threadLocalAnnotationFqName = FqName("kotlin.native.ThreadLocal")
+private val sharedAnnotationFqName = FqName("kotlin.native.SharedImmutable")
 
+
+val IrField.propertyDescriptor: PropertyDescriptor
+    get() {
+        val descriptor = this.descriptor
+        return if (descriptor is IrPropertyDelegateDescriptor)
+            descriptor.correspondingProperty
+        else
+            descriptor
+    }
+
+internal enum class FieldStorage {
+    MAIN_THREAD,
+    SHARED,
+    THREAD_LOCAL
+}
+
+// TODO: maybe unannotated singleton objects shall be accessed from main thread only as well?
 val IrClass.objectIsShared get() =
     !descriptor.annotations.hasAnnotation(threadLocalAnnotationFqName)
 
-val IrField.isShared get() =
-    !descriptor.annotations.hasAnnotation(threadLocalAnnotationFqName) && !descriptor.isVar
+internal val IrField.storageClass: FieldStorage get() {
+    val descriptor = propertyDescriptor
+    return when {
+        descriptor.annotations.hasAnnotation(threadLocalAnnotationFqName) -> FieldStorage.THREAD_LOCAL
+        descriptor.annotations.hasAnnotation(sharedAnnotationFqName) -> FieldStorage.SHARED
+        else -> FieldStorage.MAIN_THREAD
+    }
+}
+
+val IrField.isMainOnlyNonPrimitive get() = when  {
+        KotlinBuiltIns.isPrimitiveType(descriptor.type) -> false
+        else -> storageClass == FieldStorage.MAIN_THREAD
+    }
 
 internal fun emitLLVM(context: Context, phaser: PhaseManager) {
     val irModule = context.irModule!!
@@ -404,10 +425,11 @@ internal class CodeGeneratorVisitor(val context: Context, val lifetimes: Map<IrE
                     context.llvm.fileInitializers
                             .forEach {
                                 if (it.initializer?.expression !is IrConst<*>?) {
-                                    if (it.isShared) {
+                                    if (it.storageClass != FieldStorage.THREAD_LOCAL) {
                                         val initialization = evaluateExpression(it.initializer!!.expression)
                                         val address = context.llvmDeclarations.forStaticField(it).storage
-                                        freeze(initialization, currentCodeContext.exceptionHandler)
+                                        if (it.storageClass == FieldStorage.SHARED)
+                                            freeze(initialization, currentCodeContext.exceptionHandler)
                                         storeAny(initialization, address)
                                     }
                                 }
@@ -419,7 +441,7 @@ internal class CodeGeneratorVisitor(val context: Context, val lifetimes: Map<IrE
                     context.llvm.fileInitializers
                             .forEach {
                                 if (it.initializer?.expression !is IrConst<*>?) {
-                                   if (!it.isShared) {
+                                   if (it.storageClass == FieldStorage.THREAD_LOCAL) {
                                        val initialization = evaluateExpression(it.initializer!!.expression)
                                        val address = context.llvmDeclarations.forStaticField(it).storage
                                        storeAny(initialization, address)
@@ -432,7 +454,7 @@ internal class CodeGeneratorVisitor(val context: Context, val lifetimes: Map<IrE
                 appendingTo(bbLocalDeinit) {
                     context.llvm.fileInitializers.forEach {
                         // Only if a subject for memory management.
-                        if (it.type.binaryTypeIsReference() && !it.isShared) {
+                        if (it.type.binaryTypeIsReference() && it.storageClass == FieldStorage.THREAD_LOCAL) {
                             val address = context.llvmDeclarations.forStaticField(it).storage
                             storeAny(codegen.kNullObjHeaderPtr, address)
                         }
@@ -445,7 +467,7 @@ internal class CodeGeneratorVisitor(val context: Context, val lifetimes: Map<IrE
                     context.llvm.fileInitializers
                             // Only if a subject for memory management.
                             .forEach {
-                                if (it.type.binaryTypeIsReference() && it.isShared) {
+                                if (it.type.binaryTypeIsReference() && it.storageClass != FieldStorage.THREAD_LOCAL) {
                                     val address = context.llvmDeclarations.forStaticField(it).storage
                                     storeAny(codegen.kNullObjHeaderPtr, address)
                                 }
@@ -1256,8 +1278,7 @@ internal class CodeGeneratorVisitor(val context: Context, val lifetimes: Map<IrE
     private fun evaluateIntegerCoercion(value: IrTypeOperatorCall): LLVMValueRef {
         context.log{"evaluateIntegerCoercion        : ${ir2string(value)}"}
         val type = value.typeOperand
-        val typeIsUnsigned = type.isUnsignedInteger()
-        assert(type.isPrimitiveInteger() || typeIsUnsigned)
+        assert(type.isPrimitiveInteger() || type.isUnsignedInteger())
         val result = evaluateExpression(value.argument)
         assert(value.argument.type.isInt())
         val llvmSrcType = codegen.getLLVMType(value.argument.type)
@@ -1267,9 +1288,7 @@ internal class CodeGeneratorVisitor(val context: Context, val lifetimes: Map<IrE
         return when {
             srcWidth == dstWidth           -> result
             srcWidth > dstWidth            -> LLVMBuildTrunc(functionGenerationContext.builder, result, llvmDstType, "")!!
-            /* srcWidth < dstWidth */
-            typeIsUnsigned                 -> LLVMBuildZExt(functionGenerationContext.builder, result, llvmDstType, "")!!
-            else                           -> LLVMBuildSExt(functionGenerationContext.builder, result, llvmDstType, "")!!
+            else /* srcWidth < dstWidth */ -> LLVMBuildSExt(functionGenerationContext.builder, result, llvmDstType, "")!!
         }
     }
 
@@ -1428,7 +1447,10 @@ internal class CodeGeneratorVisitor(val context: Context, val lifetimes: Map<IrE
             return functionGenerationContext.loadSlot(
                     fieldPtrOfClass(thisPtr, value.symbol.owner), value.descriptor.isVar())
         } else {
-            assert (value.receiver == null)
+            assert(value.receiver == null)
+            if (context.config.threadsAreAllowed && value.symbol.owner.isMainOnlyNonPrimitive) {
+                functionGenerationContext.checkMainThread(currentCodeContext.exceptionHandler)
+            }
             val ptr = context.llvmDeclarations.forStaticField(value.symbol.owner).storage
             return functionGenerationContext.loadSlot(ptr, value.descriptor.isVar())
         }
@@ -1459,7 +1481,9 @@ internal class CodeGeneratorVisitor(val context: Context, val lifetimes: Map<IrE
         } else {
             assert(value.receiver == null)
             val globalValue = context.llvmDeclarations.forStaticField(value.symbol.owner).storage
-            if (value.symbol.owner.isShared)
+            if (context.config.threadsAreAllowed && value.symbol.owner.isMainOnlyNonPrimitive)
+                functionGenerationContext.checkMainThread(currentCodeContext.exceptionHandler)
+            if (value.symbol.owner.storageClass == FieldStorage.SHARED)
                 functionGenerationContext.freeze(valueToAssign, currentCodeContext.exceptionHandler)
             functionGenerationContext.storeAny(valueToAssign, globalValue)
         }
@@ -1899,19 +1923,18 @@ internal class CodeGeneratorVisitor(val context: Context, val lifetimes: Map<IrE
 
     //-------------------------------------------------------------------------//
 
-    private val coroutineImplDescriptor = context.ir.symbols.coroutineImpl.owner
-    private val doResumeFunctionDescriptor = coroutineImplDescriptor.declarations
-            .filterIsInstance<IrSimpleFunction>().single { it.name.asString() == "doResume" }
+    private val invokeSuspendFunction = context.ir.symbols.baseContinuationImpl.owner.declarations
+            .filterIsInstance<IrSimpleFunction>().single { it.name.asString() == "invokeSuspend" }
 
     private fun getContinuation(): LLVMValueRef {
         val caller = functionGenerationContext.functionDescriptor!!
         return if (caller.isSuspend)
             codegen.param(caller, caller.allParameters.size)    // The last argument.
         else {
-            // Suspend call from non-suspend function - must be [CoroutineImpl].
-            assert (doResumeFunctionDescriptor.symbol in (caller as IrSimpleFunction).overriddenSymbols,
-                    { "Expected 'CoroutineImpl.doResume' but was '$caller'" })
-            currentCodeContext.genGetValue(caller.dispatchReceiverParameter!!)   // Coroutine itself is a continuation.
+            // Suspend call from non-suspend function - must be [BaseContinuationImpl].
+            assert ((caller as IrSimpleFunction).overrides(invokeSuspendFunction),
+                    { "Expected 'BaseContinuationImpl.invokeSuspend' but was '$caller'" })
+            currentCodeContext.genGetValue(caller.dispatchReceiverParameter!!)
         }
     }
 

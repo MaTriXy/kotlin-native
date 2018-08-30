@@ -1,17 +1,6 @@
 /*
- * Copyright 2010-2017 JetBrains s.r.o.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE file.
  */
 
 package org.jetbrains.kotlin.backend.konan.llvm
@@ -25,14 +14,14 @@ import org.jetbrains.kotlin.backend.konan.Context
 import org.jetbrains.kotlin.backend.konan.descriptors.findPackage
 import org.jetbrains.kotlin.backend.konan.hash.GlobalHash
 import org.jetbrains.kotlin.backend.konan.irasdescriptors.*
-import org.jetbrains.kotlin.konan.library.KonanLibrary
-import org.jetbrains.kotlin.backend.konan.library.withResolvedDependencies
 import org.jetbrains.kotlin.descriptors.konan.CompiledKonanModuleOrigin
 import org.jetbrains.kotlin.descriptors.konan.CurrentKonanModuleOrigin
 import org.jetbrains.kotlin.descriptors.konan.DeserializedKonanModuleOrigin
 import org.jetbrains.kotlin.ir.declarations.IrExternalPackageFragment
 import org.jetbrains.kotlin.ir.declarations.IrField
 import org.jetbrains.kotlin.ir.declarations.IrFile
+import org.jetbrains.kotlin.konan.library.KonanLibrary
+import org.jetbrains.kotlin.konan.library.resolver.TopologicalLibraryOrder
 import org.jetbrains.kotlin.konan.target.KonanTarget
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
@@ -330,47 +319,23 @@ internal class Llvm(val context: Context, val llvmModule: LLVMModuleRef) {
         private val allLibraries = context.librariesWithDependencies.toSet()
 
         override fun add(origin: CompiledKonanModuleOrigin) {
-            val reader = when (origin) {
+            val library = when (origin) {
                 CurrentKonanModuleOrigin -> return
-                is DeserializedKonanModuleOrigin -> origin.reader as KonanLibrary
+                is DeserializedKonanModuleOrigin -> origin.library
             }
 
-            if (reader !in allLibraries) {
-                error("$reader (${reader.libraryName}) is used but not requested")
+            if (library !in allLibraries) {
+                error("Library (${library.libraryName}) is used but not requested.\nRequested libraries: ${allLibraries.joinToString { it.libraryName }}")
             }
 
-            usedLibraries.add(reader)
+            usedLibraries.add(library)
         }
     }
 
-    val librariesToLink: List<KonanLibrary>  by lazy {
-        context.config.immediateLibraries
-                .filter { (!it.isDefaultLibrary && !context.config.purgeUserLibs) || it in usedLibraries }
-                .withResolvedDependencies()
-                .topoSort()
-    }
-
-    private fun List<KonanLibrary>.topoSort(): List<KonanLibrary> {
-        var sorted = mutableListOf<KonanLibrary>()
-        val visited = mutableSetOf<KonanLibrary>()
-        val tempMarks = mutableSetOf<KonanLibrary>()
-
-        fun visit(node: KonanLibrary, result: MutableList<KonanLibrary>) {
-            if (visited.contains(node)) return
-            if (tempMarks.contains(node)) error("Cyclic dependency in library graph.")
-            tempMarks.add(node)
-            node.resolvedDependencies.forEach {
-                visit(it, result)
-            }
-            visited.add(node)
-            result += node
-        }
-
-        this.forEach next@{
-            if (visited.contains(it)) return@next
-            visit(it, sorted)
-        }
-        return sorted
+    val librariesToLink: List<KonanLibrary> by lazy {
+        context.config.resolvedLibraries
+                .filterRoots { (!it.isDefault && !context.config.purgeUserLibs) || it.library in usedLibraries }
+                .getFullList(TopologicalLibraryOrder)
     }
 
     val librariesForLibraryManifest: List<KonanLibrary> get() {
@@ -419,6 +384,7 @@ internal class Llvm(val context: Context, val llvmModule: LLVMModuleRef) {
     val initRuntimeIfNeeded = importRtFunction("Kotlin_initRuntimeIfNeeded")
     val mutationCheck = importRtFunction("MutationCheck")
     val freezeSubgraph = importRtFunction("FreezeSubgraph")
+    val checkMainThread = importRtFunction("CheckIsMainThread")
 
     val createKotlinObjCClass by lazy { importRtFunction("CreateKotlinObjCClass") }
     val getObjCKotlinTypeInfo by lazy { importRtFunction("GetObjCKotlinTypeInfo") }

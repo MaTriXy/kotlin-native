@@ -1,17 +1,6 @@
 /*
- * Copyright 2010-2017 JetBrains s.r.o.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE file.
  */
 
 package kotlin.native
@@ -62,10 +51,18 @@ public annotation class Throws(vararg val exceptionClasses: KClass<out Throwable
 public annotation class ThreadLocal
 
 /**
+ * Top level variable is immutable and so could be shared.
+ * PLEASE NOTE THAT THIS ANNOTATION MAY GO AWAY IN UPCOMING RELEASES.
+ */
+@Target(AnnotationTarget.FIELD)
+@Retention(AnnotationRetention.BINARY)
+public annotation class SharedImmutable
+
+/**
  * Makes top level function available from C/C++ code with the given name.
- * `fullName` controls the name of top level function, `shortName` controls the short name.
- * If `fullName` is empty, no top level declaration is being created.
+ * `externName` controls the name of top level function, `shortName` controls the short name.
+ * If `externName` is empty, no top level declaration is being created.
  */
 @Target(AnnotationTarget.FUNCTION)
 @Retention(AnnotationRetention.BINARY)
-public annotation class CName(val fullName: String = "", val shortName: String = "")
+public annotation class CName(val externName: String = "", val shortName: String = "")

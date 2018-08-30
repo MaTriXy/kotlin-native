@@ -1,17 +1,6 @@
 /*
- * Copyright 2010-2017 JetBrains s.r.o.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE file.
  */
 
 package org.jetbrains.kotlin.backend.konan.lower
@@ -26,6 +15,7 @@ import org.jetbrains.kotlin.backend.konan.descriptors.allOverriddenDescriptors
 import org.jetbrains.kotlin.backend.konan.descriptors.isInterface
 import org.jetbrains.kotlin.backend.konan.descriptors.synthesizedName
 import org.jetbrains.kotlin.backend.konan.irasdescriptors.*
+import org.jetbrains.kotlin.builtins.UnsignedTypes
 import org.jetbrains.kotlin.descriptors.*
 import org.jetbrains.kotlin.descriptors.ClassConstructorDescriptor
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
@@ -820,7 +810,7 @@ private class InteropTransformer(val context: Context, val irFile: IrFile) : IrB
                         typeArgumentsCount = 0)
             }
 
-            interop.scheduleFunction -> {
+            interop.executeFunction -> {
                 val irCallableReference = unwrapStaticFunctionArgument(expression.getValueArgument(2)!!)
 
                 if (irCallableReference == null || irCallableReference.getArguments().isNotEmpty()) {
@@ -834,11 +824,11 @@ private class InteropTransformer(val context: Context, val irFile: IrFile) : IrB
                 val target = targetSymbol.descriptor
                 val jobPointer = IrFunctionReferenceImpl(
                         builder.startOffset, builder.endOffset,
-                        symbols.scheduleImpl.owner.valueParameters[3].type,
+                        symbols.executeImpl.owner.valueParameters[3].type,
                         targetSymbol, target,
                         typeArgumentsCount = 0)
 
-                builder.irCall(symbols.scheduleImpl).apply {
+                builder.irCall(symbols.executeImpl).apply {
                     putValueArgument(0, expression.dispatchReceiver)
                     putValueArgument(1, expression.getValueArgument(0))
                     putValueArgument(2, expression.getValueArgument(1))
@@ -901,6 +891,34 @@ private class InteropTransformer(val context: Context, val irFile: IrFile) : IrB
                 }
             }
 
+            in interop.convert -> {
+                val integerClasses = symbols.allIntegerClasses
+                val typeOperand = expression.getTypeArgument(0)!!
+                val receiverType = expression.symbol.owner.extensionReceiverParameter!!.type
+                val source = receiverType.classifierOrFail as IrClassSymbol
+                assert(source in integerClasses)
+
+                if (typeOperand is IrSimpleType && typeOperand.classifier in integerClasses && !typeOperand.hasQuestionMark) {
+                    val target = typeOperand.classifier as IrClassSymbol
+                    val valueToConvert = expression.extensionReceiver!!
+
+                    if (source in symbols.signedIntegerClasses && target in symbols.unsignedIntegerClasses) {
+                        // Default Kotlin signed-to-unsigned widening integer conversions don't follow C rules.
+                        val signedTarget = symbols.unsignedToSignedOfSameBitWidth[target]!!
+                        val widened = builder.irConvertInteger(source, signedTarget, valueToConvert)
+                        builder.irConvertInteger(signedTarget, target, widened)
+                    } else {
+                        builder.irConvertInteger(source, target, valueToConvert)
+                    }
+                } else {
+                    context.reportCompilationError(
+                            "unable to convert ${receiverType.toKotlinType()} to ${typeOperand.toKotlinType()}",
+                            irFile,
+                            expression
+                    )
+                }
+            }
+
             in interop.cFunctionPointerInvokes -> {
                 // Replace by `invokeImpl${type}Ret`:
 
@@ -957,6 +975,21 @@ private class InteropTransformer(val context: Context, val irFile: IrFile) : IrB
         }
     }
 
+    private fun IrBuilderWithScope.irConvertInteger(
+            source: IrClassSymbol,
+            target: IrClassSymbol,
+            value: IrExpression
+    ): IrExpression {
+        val conversion = symbols.integerConversions[source to target]!!
+        return irCall(conversion.owner).apply {
+            if (conversion.owner.dispatchReceiverParameter != null) {
+                dispatchReceiver = value
+            } else {
+                extensionReceiver = value
+            }
+        }
+    }
+
     private fun IrType.ensureSupportedInCallbacks(isReturnType: Boolean, reportError: (String) -> Nothing) {
         this.checkCTypeNullability(reportError)
 
@@ -968,6 +1001,10 @@ private class InteropTransformer(val context: Context, val irFile: IrFile) : IrB
             return
         }
 
+        if (UnsignedTypes.isUnsignedType(this.toKotlinType()) && !this.containsNull()) {
+            return
+        }
+
         if (this.getClass()?.descriptor == interop.cPointer) {
             return
         }
@@ -976,7 +1013,7 @@ private class InteropTransformer(val context: Context, val irFile: IrFile) : IrB
     }
 
     private fun IrType.checkCTypeNullability(reportError: (String) -> Nothing) {
-        if (this.isNullablePrimitiveType()) {
+        if (this.isNullablePrimitiveType() || UnsignedTypes.isUnsignedType(this.toKotlinType()) && this.containsNull()) {
             reportError("Type ${this.toKotlinType()} must not be nullable when used in C function signature")
         }
 

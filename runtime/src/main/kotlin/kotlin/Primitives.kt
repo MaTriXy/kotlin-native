@@ -1,17 +1,6 @@
 /*
- * Copyright 2010-2017 JetBrains s.r.o.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE file.
  */
 
 package kotlin
@@ -20,9 +9,9 @@ import kotlin.native.internal.NumberConverter
 
 /**
  * Represents a 8-bit signed integer.
- * On the JVM, non-nullable values of this type are represented as values of the primitive type `byte`.
  */
 public final class Byte private constructor(private val value: kotlin.native.internal.ByteValue) : Number(), Comparable<Byte> {
+
     companion object {
         /**
          * A constant holding the minimum value an instance of Byte can have.
@@ -246,7 +235,6 @@ public final class Byte private constructor(private val value: kotlin.native.int
 
 /**
  * Represents a 16-bit signed integer.
- * On the JVM, non-nullable values of this type are represented as values of the primitive type `short`.
  */
 public final class Short private constructor(private val value: kotlin.native.internal.ShortValue) : Number(), Comparable<Short> {
     companion object {
@@ -472,7 +460,6 @@ public final class Short private constructor(private val value: kotlin.native.in
 
 /**
  * Represents a 32-bit signed integer.
- * On the JVM, non-nullable values of this type are represented as values of the primitive type `int`.
  */
 public final class Int private constructor(private val value: kotlin.native.internal.IntValue) : Number(), Comparable<Int> {
     companion object {
@@ -720,7 +707,6 @@ public final class Int private constructor(private val value: kotlin.native.inte
 
 /**
  * Represents a 64-bit signed integer.
- * On the JVM, non-nullable values of this type are represented as values of the primitive type `long`.
  */
 public final class Long private constructor(private val value: kotlin.native.internal.LongValue) : Number(), Comparable<Long> {
     companion object {
@@ -968,7 +954,6 @@ public final class Long private constructor(private val value: kotlin.native.int
 
 /**
  * Represents a single-precision 32-bit IEEE 754 floating point number.
- * On the JVM, non-nullable values of this type are represented as values of the primitive type `float`.
  */
 public final class Float private constructor(private val value: kotlin.native.internal.FloatValue) : Number(), Comparable<Float> {
     companion object {
@@ -1182,12 +1167,12 @@ public final class Float private constructor(private val value: kotlin.native.in
     }
 
     @SymbolName("Kotlin_Float_bits")
-    external public fun bits(): Int
+    @PublishedApi
+    external internal fun bits(): Int
 }
 
 /**
  * Represents a double-precision 64-bit IEEE 754 floating point number.
- * On the JVM, non-nullable values of this type are represented as values of the primitive type `double`.
  */
 public final class Double private constructor(private val value: kotlin.native.internal.DoubleValue) : Number(), Comparable<Double> {
     companion object {
@@ -1398,10 +1383,11 @@ public final class Double private constructor(private val value: kotlin.native.i
 
     public override fun equals(other: Any?): Boolean = other is Double && this.equals(other)
 
-    public override fun toString() = NumberConverter.convert(this)
+    public override fun toString(): String = NumberConverter.convert(this)
 
     public override fun hashCode(): Int = bits().hashCode()
 
     @SymbolName("Kotlin_Double_bits")
-    external public fun bits(): Long
+    @PublishedApi
+    external internal fun bits(): Long
 }

@@ -1,30 +1,31 @@
 /*
- * Copyright 2010-2017 JetBrains s.r.o.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE file.
  */
 
 package org.jetbrains.kotlin.backend.konan
 
+import org.jetbrains.kotlin.builtins.UnsignedType
 import org.jetbrains.kotlin.builtins.konan.KonanBuiltIns
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
-import org.jetbrains.kotlin.descriptors.konan.interop.InteropFqNames
+import org.jetbrains.kotlin.descriptors.findClassAcrossModuleDependencies
 import org.jetbrains.kotlin.incremental.components.NoLookupLocation
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.resolve.scopes.MemberScope
 import org.jetbrains.kotlin.types.TypeUtils
 import org.jetbrains.kotlin.util.OperatorNameConventions
+
+object InteropFqNames {
+
+    const val cPointerName = "CPointer"
+    const val nativePointedName = "NativePointed"
+
+    val packageName = FqName("kotlinx.cinterop")
+
+    val cPointer = packageName.child(Name.identifier(cPointerName)).toUnsafe()
+    val nativePointed = packageName.child(Name.identifier(nativePointedName)).toUnsafe()
+}
 
 internal class InteropBuiltIns(builtIns: KonanBuiltIns, vararg konanPrimitives: ClassDescriptor) {
 
@@ -79,16 +80,18 @@ internal class InteropBuiltIns(builtIns: KonanBuiltIns, vararg konanPrimitives: 
 
     val staticCFunction = packageScope.getContributedFunctions("staticCFunction").toSet()
 
-    val workerPackageScope = builtIns.builtInsModule.getPackage(FqName("kotlin.native.worker")).memberScope
+    val concurrentPackageScope = builtIns.builtInsModule.getPackage(FqName("kotlin.native.concurrent")).memberScope
 
-    val scheduleFunction = workerPackageScope.getContributedClass("Worker")
-            .unsubstitutedMemberScope.getContributedFunctions("schedule").single()
+    val executeFunction = concurrentPackageScope.getContributedClass("Worker")
+            .unsubstitutedMemberScope.getContributedFunctions("execute").single()
 
-    val scheduleImplFunction = workerPackageScope.getContributedFunctions("scheduleImpl").single()
+    val executeImplFunction = concurrentPackageScope.getContributedFunctions("executeImpl").single()
 
     val signExtend = packageScope.getContributedFunctions("signExtend").single()
 
     val narrow = packageScope.getContributedFunctions("narrow").single()
+
+    val convert = packageScope.getContributedFunctions("convert").toSet()
 
     val readBits = packageScope.getContributedFunctions("readBits").single()
     val writeBits = packageScope.getContributedFunctions("writeBits").single()
@@ -101,6 +104,9 @@ internal class InteropBuiltIns(builtIns: KonanBuiltIns, vararg konanPrimitives: 
                         TypeUtils.getClassDescriptor(extensionReceiverParameter.type) == cPointer
             }.toSet()
 
+    private fun KonanBuiltIns.getUnsignedClass(unsignedType: UnsignedType): ClassDescriptor =
+            this.builtInsModule.findClassAcrossModuleDependencies(unsignedType.classId)!!
+
     val invokeImpls = mapOf(
             builtIns.unit to "invokeImplUnitRet",
             builtIns.boolean to "invokeImplBooleanRet",
@@ -108,6 +114,10 @@ internal class InteropBuiltIns(builtIns: KonanBuiltIns, vararg konanPrimitives: 
             builtIns.short to "invokeImplShortRet",
             builtIns.int to "invokeImplIntRet",
             builtIns.long to "invokeImplLongRet",
+            builtIns.getUnsignedClass(UnsignedType.UBYTE) to "invokeImplUByteRet",
+            builtIns.getUnsignedClass(UnsignedType.USHORT) to "invokeImplUShortRet",
+            builtIns.getUnsignedClass(UnsignedType.UINT) to "invokeImplUIntRet",
+            builtIns.getUnsignedClass(UnsignedType.ULONG) to "invokeImplULongRet",
             builtIns.float to "invokeImplFloatRet",
             builtIns.double to "invokeImplDoubleRet",
             cPointer to "invokeImplPointerRet"

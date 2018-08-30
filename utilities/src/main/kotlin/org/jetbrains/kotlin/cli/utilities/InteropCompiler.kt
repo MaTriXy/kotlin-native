@@ -1,32 +1,21 @@
 /*
- * Copyright 2010-2017 JetBrains s.r.o.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE file.
  */
-
 package org.jetbrains.kotlin.cli.utilities
 
-import org.jetbrains.kotlin.backend.konan.library.resolveLibrariesRecursive
+import org.jetbrains.kotlin.backend.konan.library.KLIB_CURRENT_ABI_VERSION
 import org.jetbrains.kotlin.konan.file.File
 import org.jetbrains.kotlin.konan.library.defaultResolver
 import org.jetbrains.kotlin.konan.library.includedHeaders
+import org.jetbrains.kotlin.konan.library.libraryResolver
 import org.jetbrains.kotlin.konan.library.packageFqName
 import org.jetbrains.kotlin.konan.target.PlatformManager
 import org.jetbrains.kotlin.native.interop.gen.jvm.interop
 import org.jetbrains.kotlin.utils.addIfNotNull
 
-private val NODEFAULTLIBS = "-nodefaultlibs"
-private val PURGE_USER_LIBS = "--purge_user_libs"
+private const val NODEFAULTLIBS = "-nodefaultlibs"
+private const val PURGE_USER_LIBS = "--purge_user_libs"
 
 // TODO: this function should eventually be eliminated from 'utilities'. 
 // The interaction of interop and the compler should be streamlined. 
@@ -68,15 +57,15 @@ fun invokeInterop(flavor: String, args: Array<String>): Array<String> {
     val manifest = File(buildDir, "manifest.properties")
 
     val target = PlatformManager().targetManager(targetRequest).target
-    val resolver = defaultResolver(repos, target)
-    val allLibraries = resolver.resolveLibrariesRecursive(
-            libraries, target, noStdLib = true, noDefaultLibs = noDefaultLibs
-    )
+    val resolver = defaultResolver(repos, target).libraryResolver(KLIB_CURRENT_ABI_VERSION)
+    val allLibraries = resolver.resolveWithDependencies(
+            libraries, noStdLib = true, noDefaultLibs = noDefaultLibs
+    ).getFullList()
 
-    val importArgs = allLibraries.flatMap {libraryReader ->
+    val importArgs = allLibraries.flatMap { library ->
         // TODO: handle missing properties?
-        libraryReader.packageFqName?.asString()?.let { packageFqName ->
-            val headerIds = libraryReader.includedHeaders
+        library.packageFqName?.asString()?.let { packageFqName ->
+            val headerIds = library.includedHeaders
             val arg = "$packageFqName:${headerIds.joinToString(";")}"
             listOf("-import", arg)
         } ?: emptyList()

@@ -1,17 +1,6 @@
 /*
- * Copyright 2010-2017 JetBrains s.r.o.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE file.
  */
 
 import groovy.json.JsonOutput
@@ -1329,16 +1318,19 @@ task coroutines_controlFlow_finally4(type: RunKonanTest) {
 }
 
 task coroutines_controlFlow_finally5(type: RunKonanTest) {
+    expectedFail = (project.testTarget == 'wasm32') // Uses exceptions.
     goldValue = "s1\nf2\nfinally\n1\n"
     source = "codegen/coroutines/controlFlow_finally5.kt"
 }
 
 task coroutines_controlFlow_finally6(type: RunKonanTest) {
+    expectedFail = (project.testTarget == 'wasm32') // Uses exceptions.
     goldValue = "s1\nfinally\nerror\n0\n"
     source = "codegen/coroutines/controlFlow_finally6.kt"
 }
 
 task coroutines_controlFlow_finally7(type: RunKonanTest) {
+    expectedFail = (project.testTarget == 'wasm32') // Uses exceptions.
     goldValue = "s1\nf2\nfinally1\ns2\nfinally2\n42\n"
     source = "codegen/coroutines/controlFlow_finally7.kt"
 }
@@ -1364,21 +1356,25 @@ task coroutines_controlFlow_tryCatch1(type: RunKonanTest) {
 }
 
 task coroutines_controlFlow_tryCatch2(type: RunKonanTest) {
+    expectedFail = (project.testTarget == 'wasm32') // Uses exceptions.
     goldValue = "s1\n42\n"
     source = "codegen/coroutines/controlFlow_tryCatch2.kt"
 }
 
 task coroutines_controlFlow_tryCatch3(type: RunKonanTest) {
+    expectedFail = (project.testTarget == 'wasm32') // Uses exceptions.
     goldValue = "s2\nf2\n1\n"
     source = "codegen/coroutines/controlFlow_tryCatch3.kt"
 }
 
 task coroutines_controlFlow_tryCatch4(type: RunKonanTest) {
+    expectedFail = (project.testTarget == 'wasm32') // Uses exceptions.
     goldValue = "s2\nf2\n1\n"
     source = "codegen/coroutines/controlFlow_tryCatch4.kt"
 }
 
 task coroutines_controlFlow_tryCatch5(type: RunKonanTest) {
+    expectedFail = (project.testTarget == 'wasm32') // Uses exceptions.
     goldValue = "s2\ns1\nError\n42\n"
     source = "codegen/coroutines/controlFlow_tryCatch5.kt"
 }
@@ -1445,8 +1441,6 @@ task array3(type: RunKonanTest) {
 }
 
 task typed_array0(type: RunKonanTest) {
-    // MIPS target is big-endian.
-    disabled = (project.testTarget == 'linux_mips32')
     goldValue = "OK\n"
     source = "runtime/collections/typed_array0.kt"
 }
@@ -2526,6 +2520,11 @@ task inline_defaultArgs(type: RunKonanTest) {
     source = "codegen/inline/defaultArgs.kt"
 }
 
+task inline_twiceInlinedObject(type: RunKonanTest) {
+    goldValue = "Ok\n"
+    source = "codegen/inline/twiceInlinedObject.kt"
+}
+
 task classDeclarationInsideInline(type: RunKonanTest) {
     source = "codegen/inline/classDeclarationInsideInline.kt"
     goldValue = "test1: 1.0\n1\ntest2\n"
@@ -2886,6 +2885,7 @@ task produce_dynamic(type: DynamicKonanTest) {
                 "RW property is 239\n" +
                 "enum100 = 100\n" +
                 "object = 42\n" +
+                "singleton = I am single\n" +
                 "topLevel = 777 3\n"
 }
 

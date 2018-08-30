@@ -15,11 +15,12 @@
  */
 
 import ffmpeg.*
+import kotlin.native.concurrent.*
 import kotlinx.cinterop.*
-import kotlin.native.worker.*
 import platform.posix.memcpy
 
 // This global variable only set to != null value in the decoding worker.
+@ThreadLocal
 private var decoder: Decoder? = null
 
 data class VideoInfo(val size: Dimensions, val fps: Double)
@@ -41,13 +42,13 @@ class AudioFrame(val buffer: CPointer<AVBufferRef>, var position: Int, val size:
 private fun Int.checkAVError() {
     if (this != 0) {
         val buffer = ByteArray(1024)
-        av_strerror(this, buffer.refTo(0), buffer.size.signExtend())
+        av_strerror(this, buffer.refTo(0), buffer.size.convert())
         throw Error("AVError: ${buffer.stringFromUtf8()}")
     }
 }
 
 private val AVFormatContext.codecs: List<AVCodecContext?>
-    get() = List(nb_streams) { streams?.get(it)?.pointed?.codec?.pointed }
+    get() = List(nb_streams.toInt()) { streams?.get(it)?.pointed?.codec?.pointed }
 
 private fun AVFormatContext.streamAt(index: Int): AVStream? =
     if (index < 0) null else streams?.get(index)?.pointed
@@ -123,7 +124,7 @@ private class VideoDecoder(
         dispose = ::sws_freeContext
     )
     private val scaledFrameSize = avpicture_get_size(avPixelFormat, windowSize.w, windowSize.h)
-    private val buffer: ByteArray = ByteArray(scaledFrameSize)
+    private val buffer: UByteArray = UByteArray(scaledFrameSize) { 0u }
 
     private val videoQueue = Queue<VideoFrame>(100)
 
@@ -157,7 +158,7 @@ private class VideoDecoder(
             val buffer = av_buffer_alloc(scaledFrameSize)!!
             val ts = av_frame_get_best_effort_timestamp(videoFrame.ptr) *
                 av_q2d(videoCodecContext.time_base.readValue())
-            memcpy(buffer.pointed.data, scaledVideoFrame.data[0], scaledFrameSize.signExtend())
+            memcpy(buffer.pointed.data, scaledVideoFrame.data[0], scaledFrameSize.convert())
             videoQueue.push(VideoFrame(buffer, scaledVideoFrame.linesize[0], ts))
         }
     }
@@ -203,11 +204,11 @@ private class AudioDecoder(
             channels = output.channels
             sample_rate = output.sampleRate
             format = output.sampleFormat
-            channel_layout = output.channelLayout.signExtend()
+            channel_layout = output.channelLayout.convert()
         }
 
         with (audioCodecContext) {
-            setResampleOpt("in_channel_layout", channel_layout.narrow())
+            setResampleOpt("in_channel_layout", channel_layout.convert())
             setResampleOpt("out_channel_layout", output.channelLayout)
             setResampleOpt("in_sample_rate", sample_rate)
             setResampleOpt("out_sample_rate", output.sampleRate)
@@ -254,7 +255,7 @@ private class AudioDecoder(
                     val buffer = av_buffer_alloc(audioFrameSize)!!
                     val ts = av_frame_get_best_effort_timestamp(audioFrame.ptr) *
                         av_q2d(audioCodecContext.time_base.readValue())
-                    memcpy(buffer.pointed.data, data[0], audioFrameSize.signExtend())
+                    memcpy(buffer.pointed.data, data[0], audioFrameSize.convert())
                     audioQueue.push(AudioFrame(buffer, 0, audioFrameSize, ts))
                 }
             }
@@ -324,19 +325,14 @@ private class Decoder(
     fun audioVideoSynced() = (audio?.isSynced() ?: true) || done()
 }
 
-class DecoderWorker : Disposable {
+class DecoderWorker(val worker: Worker) : Disposable {
     // This class must have no other state, but this worker object.
     // All the real state must be stored on the worker's side.
-    private val worker: Worker
-
-    constructor() { worker = kotlin.native.worker.startWorker() }
-    constructor(id: WorkerId) { worker = Worker(id) }
+    constructor() : this(Worker.start())
 
     override fun dispose() {
-        worker.requestTermination().result()
+        worker.requestTermination().result
     }
-    
-    val workerId get() = worker.id
 
     fun initDecode(context: AVFormatContext, useVideo: Boolean = true, useAudio: Boolean = true): CodecInfo {
         // Find the first video/audio streams.
@@ -361,7 +357,7 @@ class DecoderWorker : Disposable {
         }
 
         // Pack all state and pass it to the worker.
-        worker.schedule(TransferMode.CHECKED, {
+        worker.execute(TransferMode.SAFE, {
                 Decoder(context.ptr,
                     videoStreamIndex, audioStreamIndex,
                     videoContext, audioContext)
@@ -370,7 +366,7 @@ class DecoderWorker : Disposable {
     }
 
     fun start(videoOutput: VideoOutput, audioOutput: AudioOutput) {
-        worker.schedule(TransferMode.CHECKED,
+        worker.execute(TransferMode.SAFE,
             { Pair(
                 videoOutput.toVideoDecoderOutput(),
                 audioOutput.toAudioDecoderOutput())
@@ -380,27 +376,26 @@ class DecoderWorker : Disposable {
     }
 
     fun stop() {
-        worker.schedule(TransferMode.CHECKED, { null }) {
+        worker.execute(TransferMode.SAFE, { null }) {
             decoder?.run {
                 dispose()
                 decoder = null
             }
-        }.result()
+        }.result
     }
 
     fun done(): Boolean =
-        worker.schedule(TransferMode.CHECKED, { null }) { decoder?.done() ?: true }.result()
+            worker.execute(TransferMode.SAFE, { null }) { decoder?.done() ?: true }.result
 
-    fun requestDecodeChunk() {
-        worker.schedule(TransferMode.CHECKED, { null }) { decoder?.decodeIfNeeded() }.result()
-    }
+    fun requestDecodeChunk() =
+            worker.execute(TransferMode.SAFE, { null }) { decoder?.decodeIfNeeded() }.result
 
     fun nextVideoFrame(): VideoFrame? =
-        worker.schedule(TransferMode.CHECKED, { null }) { decoder?.nextVideoFrame() }.result()
+        worker.execute(TransferMode.SAFE, { null }) { decoder?.nextVideoFrame() }.result
 
     fun nextAudioFrame(size: Int): AudioFrame? =
-        worker.schedule(TransferMode.CHECKED, { size }) { decoder?.nextAudioFrame(it) }.result()
+        worker.execute(TransferMode.SAFE, { size }) { decoder?.nextAudioFrame(it) }.result
 
     fun audioVideoSynced(): Boolean =
-        worker.schedule(TransferMode.CHECKED, { null }) { decoder?.audioVideoSynced() ?: true }.result()
+        worker.execute(TransferMode.SAFE, { null }) { decoder?.audioVideoSynced() ?: true }.result
 }

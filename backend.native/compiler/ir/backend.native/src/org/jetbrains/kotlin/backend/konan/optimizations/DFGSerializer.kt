@@ -1,17 +1,6 @@
 /*
- * Copyright 2010-2017 JetBrains s.r.o.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE file.
  */
 
 package org.jetbrains.kotlin.backend.konan.optimizations
@@ -19,7 +8,8 @@ package org.jetbrains.kotlin.backend.konan.optimizations
 import org.jetbrains.kotlin.backend.konan.Context
 import org.jetbrains.kotlin.backend.konan.PrimitiveBinaryType
 import org.jetbrains.kotlin.config.CommonConfigurationKeys
-import org.jetbrains.kotlin.serialization.konan.DefaultKonanModuleDescriptorFactory
+import org.jetbrains.kotlin.konan.utils.KonanFactories.DefaultDeserializedDescriptorFactory
+import org.jetbrains.kotlin.storage.LockBasedStorageManager
 import sun.misc.Unsafe
 import kotlin.reflect.KClass
 import kotlin.reflect.full.memberProperties
@@ -940,6 +930,7 @@ internal object DFGSerializer {
         val publicFunctionsMap = mutableMapOf<Long, DataFlowIR.FunctionSymbol.Public>()
         val functions = mutableMapOf<DataFlowIR.FunctionSymbol, DataFlowIR.Function>()
         val specifics = context.config.configuration.get(CommonConfigurationKeys.LANGUAGE_VERSION_SETTINGS)!!
+        val storageManager = LockBasedStorageManager()
         context.librariesWithDependencies.forEach { library ->
             val libraryDataFlowGraph = library.dataFlowGraph
 
@@ -949,7 +940,7 @@ internal object DFGSerializer {
 
             if (libraryDataFlowGraph != null) {
                 val module = DataFlowIR.Module(
-                        DefaultKonanModuleDescriptorFactory.createModuleDescriptor(library, specifics))
+                        DefaultDeserializedDescriptorFactory.createDescriptorAndNewBuiltIns(library, specifics, storageManager))
                 val reader = ArraySlice(libraryDataFlowGraph)
                 val dataLayoutHash = reader.readLong()
                 val expectedHash = computeDataLayoutHash(Module::class)

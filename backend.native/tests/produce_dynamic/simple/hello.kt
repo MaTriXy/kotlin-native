@@ -1,3 +1,8 @@
+/*
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE file.
+ */
+
 import kotlinx.cinterop.*
 
 import kotlin.native.CName
@@ -15,12 +20,12 @@ open class Base {
 
     open fun fooParam(arg0: String, arg1: Int) = println("Base.fooParam: $arg0 $arg1")
 
-    @CName(fullName = "", shortName = "strangeName") fun странноеИмя() = 111
+    @CName(externName = "", shortName = "strangeName") fun странноеИмя() = 111
 
 }
 
 // Top level functions.
-@CName(fullName = "topLevelFunctionFromC", shortName = "topLevelFunctionFromCShort")
+@CName(externName = "topLevelFunctionFromC", shortName = "topLevelFunctionFromCShort")
 fun topLevelFunction(x1: Int, x2: Int) = x1 - x2
 
 @CName("topLevelFunctionVoidFromC")
@@ -43,6 +48,10 @@ interface Codeable {
 
 val an_object = object : Codeable {
     override fun asCode() = 42
+}
+
+object Singleton {
+    override fun toString() = "I am single"
 }
 
 class Child : Base() {

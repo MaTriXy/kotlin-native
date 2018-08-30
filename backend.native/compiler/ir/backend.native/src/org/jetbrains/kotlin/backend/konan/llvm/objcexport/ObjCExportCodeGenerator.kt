@@ -1,17 +1,6 @@
 /*
- * Copyright 2010-2017 JetBrains s.r.o.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE file.
  */
 
 package org.jetbrains.kotlin.backend.konan.llvm.objcexport
@@ -100,7 +89,7 @@ internal class ObjCExportCodeGenerator(
         ObjCValueType.CHAR, ObjCValueType.SHORT, ObjCValueType.INT, ObjCValueType.LONG_LONG,
         ObjCValueType.UNSIGNED_CHAR, ObjCValueType.UNSIGNED_SHORT, ObjCValueType.UNSIGNED_INT,
         ObjCValueType.UNSIGNED_LONG_LONG,
-        ObjCValueType.FLOAT, ObjCValueType.DOUBLE -> value
+        ObjCValueType.FLOAT, ObjCValueType.DOUBLE, ObjCValueType.POINTER -> value
     }
 
     private fun FunctionGenerationContext.objCToKotlin(
@@ -113,7 +102,7 @@ internal class ObjCExportCodeGenerator(
         ObjCValueType.CHAR, ObjCValueType.SHORT, ObjCValueType.INT, ObjCValueType.LONG_LONG,
         ObjCValueType.UNSIGNED_CHAR, ObjCValueType.UNSIGNED_SHORT, ObjCValueType.UNSIGNED_INT,
         ObjCValueType.UNSIGNED_LONG_LONG,
-        ObjCValueType.FLOAT, ObjCValueType.DOUBLE -> value
+        ObjCValueType.FLOAT, ObjCValueType.DOUBLE, ObjCValueType.POINTER -> value
     }
 
     fun FunctionGenerationContext.kotlinReferenceToObjC(value: LLVMValueRef) =
@@ -180,6 +169,9 @@ internal class ObjCExportCodeGenerator(
             dataGenerator.emitEmptyClass(namer.getPackageName(fqName), namer.kotlinAnyName)
         }
 
+        NSNumberKind.values().mapNotNull { it.mappedKotlinClassId }.forEach {
+            dataGenerator.exportClass("Kotlin${it.shortClassName}")
+        }
         dataGenerator.exportClass("KotlinMutableSet")
         dataGenerator.exportClass("KotlinMutableDictionary")
 
@@ -356,7 +348,7 @@ private fun ObjCExportCodeGenerator.emitBoxConverters() {
     emitBoxConverter(irBuiltIns.shortClass, ObjCValueType.SHORT, "numberWithShort:")
     emitBoxConverter(irBuiltIns.intClass, ObjCValueType.INT, "numberWithInt:")
     emitBoxConverter(irBuiltIns.longClass, ObjCValueType.LONG_LONG, "numberWithLongLong:")
-    emitBoxConverter(symbols.uByte, ObjCValueType.UNSIGNED_CHAR, "numberWithUnsignedChar")
+    emitBoxConverter(symbols.uByte, ObjCValueType.UNSIGNED_CHAR, "numberWithUnsignedChar:")
     emitBoxConverter(symbols.uShort, ObjCValueType.UNSIGNED_SHORT, "numberWithUnsignedShort:")
     emitBoxConverter(symbols.uInt, ObjCValueType.UNSIGNED_INT, "numberWithUnsignedInt:")
     emitBoxConverter(symbols.uLong, ObjCValueType.UNSIGNED_LONG_LONG, "numberWithUnsignedLongLong:")
@@ -382,8 +374,8 @@ private fun ObjCExportCodeGenerator.emitBoxConverter(
 
         val value = kotlinToObjC(kotlinValue, objCValueType)
 
-        val nsNumber = genGetSystemClass("NSNumber")
-        ret(genSendMessage(int8TypePtr, nsNumber, nsNumberFactorySelector, value))
+        val nsNumberSubclass = genGetLinkedClass("Kotlin${boxClass.name}")
+        ret(genSendMessage(int8TypePtr, nsNumberSubclass, nsNumberFactorySelector, value))
     }
 
     LLVMSetLinkage(converter, LLVMLinkage.LLVMPrivateLinkage)
@@ -1115,6 +1107,7 @@ private val ObjCValueType.llvmType: LLVMTypeRef get() = when (this) {
     ObjCValueType.UNSIGNED_LONG_LONG -> int64Type
     ObjCValueType.FLOAT -> LLVMFloatType()!!
     ObjCValueType.DOUBLE -> LLVMDoubleType()!!
+    ObjCValueType.POINTER -> kInt8Ptr
 }
 
 private val MethodBridgeParameter.objCType: LLVMTypeRef get() = when (this) {

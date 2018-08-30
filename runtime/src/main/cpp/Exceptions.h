@@ -31,7 +31,7 @@ void ThrowException(KRef exception);
 
 void SetKonanTerminateHandler();
 
-// The functions below are implemented in Kotlin (at package konan.internal).
+// The functions below are implemented in Kotlin (at package kotlin.native.internal).
 
 // Throws null pointer exception. Context is evaluated from caller's address.
 void RUNTIME_NORETURN ThrowNullPointerException();
@@ -52,6 +52,7 @@ void RUNTIME_NORETURN ThrowNotImplementedError();
 void RUNTIME_NORETURN ThrowIllegalCharacterConversionException();
 void RUNTIME_NORETURN ThrowIllegalArgumentException();
 void RUNTIME_NORETURN ThrowInvalidMutabilityException(KConstRef where);
+void RUNTIME_NORETURN ThrowIncorrectDereferenceException();
 // Prints out mesage of Throwable.
 void PrintThrowable(KRef);
 

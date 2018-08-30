@@ -150,60 +150,23 @@ abstract class KonanTest extends JavaExec {
         return sourceFiles
     }
 
-    void createCoroutineUtil(String file) {
-        StringBuilder text = new StringBuilder("import kotlin.coroutines.experimental.*\n")
-        text.append(
-                """
-open class EmptyContinuation(override val context: CoroutineContext = EmptyCoroutineContext) : Continuation<Any?> {
-    companion object : EmptyContinuation()
-    override fun resume(value: Any?) {}
-    override fun resumeWithException(exception: Throwable) { throw exception }
-}
-
-fun <T> handleResultContinuation(x: (T) -> Unit): Continuation<T> = object: Continuation<T> {
-    override val context = EmptyCoroutineContext
-    override fun resumeWithException(exception: Throwable) {
-        throw exception
-    }
-
-    override fun resume(data: T) = x(data)
-}
-
-fun handleExceptionContinuation(x: (Throwable) -> Unit): Continuation<Any?> = object: Continuation<Any?> {
-    override val context = EmptyCoroutineContext
-    override fun resumeWithException(exception: Throwable) {
-        x(exception)
-    }
-
-    override fun resume(data: Any?) { }
-}
-"""     )
-        createFile(file, text.toString())
-    }
-
     String createTextForHelpers() {
-        def coroutinesPackage = "kotlin.coroutines.experimental"
+        def coroutinesPackage = "kotlin.coroutines"
 
         def emptyContinuationBody =
             """
-                |override fun resume(data: Any?) {}
-                |override fun resumeWithException(exception: Throwable) { throw exception }
+                |override fun resumeWith(result: SuccessOrFailure<Any?>) { result.getOrThrow() }
             """.stripMargin()
 
         def handleResultContinuationBody = """
-                |override fun resumeWithException(exception: Throwable) {
-                |   throw exception
-                |}
-                |
-                |override fun resume(data: T) = x(data)
+                |override fun resumeWith(result: SuccessOrFailure<T>) { x(result.getOrThrow()) }
             """.stripMargin()
 
         def handleExceptionContinuationBody = """
-                |override fun resumeWithException(exception: Throwable) {
-                |   x(exception)
+                |override fun resumeWith(result: SuccessOrFailure<Any?>) {
+                |    val exception = result.exceptionOrNull() ?: return
+                |    x(exception)
                 |}
-                |
-                |override fun resume(data: Any?) {}
             """.stripMargin()
 
         return """
@@ -228,6 +191,16 @@ fun handleExceptionContinuation(x: (Throwable) -> Unit): Continuation<Any?> = ob
             |
             |abstract class ContinuationAdapter<in T> : Continuation<T> {
             |    override val context: CoroutineContext = EmptyCoroutineContext
+            |    override fun resumeWith(result: SuccessOrFailure<T>) {
+            |       if (result.isSuccess) {
+            |           resume(result.getOrThrow())
+            |       } else {
+            |           resumeWithException(result.exceptionOrNull()!!)
+            |       }
+            |    }
+            |
+            |    abstract fun resumeWithException(exception: Throwable)
+            |    abstract fun resume(value: T)
             |}
         """.stripMargin()
     }
@@ -241,13 +214,8 @@ fun handleExceptionContinuation(x: (Throwable) -> Unit): Continuation<Any?> = ob
         def matcher = filePattern.matcher(srcText)
 
         if (srcText.contains('// WITH_COROUTINES')) {
-            def coroutineUtilFileName = "$outputDirectory/CoroutineUtil.kt"
-            createCoroutineUtil(coroutineUtilFileName)
-
             def coroutineHelpersFileName = "$outputDirectory/helpers.kt"
             createFile(coroutineHelpersFileName, createTextForHelpers())
-
-            result.add(coroutineUtilFileName)
             result.add(coroutineHelpersFileName)
         }
 
@@ -701,6 +669,12 @@ class RunExternalTestGroup extends RunStandaloneKonanTest {
             }
         }
 
+        def languageVersion = findLinesWithPrefixesRemoved(text, "// LANGUAGE_VERSION: ")
+        if (languageVersion.size() != 0) {
+            flags.add("-language-version")
+            flags.add(languageVersion.first())
+        }
+
         def experimentalSettings = findLinesWithPrefixesRemoved(text, "// !USE_EXPERIMENTAL: ")
         if (experimentalSettings.size() != 0) {
             experimentalSettings.forEach { line ->
@@ -715,8 +689,8 @@ class RunExternalTestGroup extends RunStandaloneKonanTest {
         lines.forEach { line ->
             // FIXME: find only those who has vars inside
             // Find object declarations and companion objects
-            if (line.matches("(?m)^\\s*object [a-zA-Z_][a-zA-Z0-9_]*\\s*.*")
-                    || line.matches("(?m)^\\s*companion object.*")) {
+            if (line.matches("\\s*(private|public|internal)?\\s*object [a-zA-Z_][a-zA-Z0-9_]*\\s*.*")
+                    || line.matches("\\s*(private|public|internal)?\\s*companion object.*")) {
                 result += "@kotlin.native.ThreadLocal"
             }
             result += line
@@ -741,7 +715,7 @@ class RunExternalTestGroup extends RunStandaloneKonanTest {
         for (String filePath : result) {
             def text = project.file(filePath).text
             if (text.contains('COROUTINES_PACKAGE')) {
-                text = text.replace('COROUTINES_PACKAGE', 'kotlin.coroutines.experimental')
+                text = text.replace('COROUTINES_PACKAGE', 'kotlin.coroutines')
             }
             def pkg = null
             if (text =~ packagePattern) {
@@ -758,7 +732,9 @@ class RunExternalTestGroup extends RunStandaloneKonanTest {
             }
 
             // Find mutable objects that should be marked as ThreadLocal
-            text = markMutableObjects(text)
+            if (filePath != "$outputDirectory/helpers.kt") {
+                text = markMutableObjects(text)
+            }
 
             createFile(filePath, text)
         }
@@ -870,15 +846,12 @@ fun runTest() {
     boolean isEnabledForNativeBackend(String fileName) {
         def text = project.file(fileName).text
 
-        def inproperIeee754Comparisons = findLinesWithPrefixesRemoved(text, '// !LANGUAGE: ')
-        if (inproperIeee754Comparisons.contains('-ProperIeee754Comparisons')) {
+        def languageSettings = findLinesWithPrefixesRemoved(text, '// !LANGUAGE: ')
+        if (languageSettings.contains('-ProperIeee754Comparisons')) {
             // K/N supports only proper IEEE754 comparisons
             return false
         }
-
-        def version = findLinesWithPrefixesRemoved(text, '// LANGUAGE_VERSION: ')
-        if (version.size() != 0 && version.contains("1.3")) {
-            // 1.3 is not yet supported
+        if (languageSettings.contains('+NewInference')) {
             return false
         }
 
@@ -958,10 +931,10 @@ fun runTest() {
             runCompiler(compileList, buildExePath(), flags)
         } catch (Exception ex) {
             println("ERROR: Compilation failed for test suite: ${testSuite.name} with exception: ${ex}")
-            ktFiles.each {
-                def testCase = testSuite.createTestCase(it.name)
-                testCase.error(ex)
-            }
+            println("The following files were unable to compile:")
+            ktFiles.each { println it.name }
+            statistics.error(ktFiles.size())
+            testSuite.finish()
             throw new RuntimeException("Compilation failed", ex)
         }
 

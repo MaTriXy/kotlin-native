@@ -1,3 +1,4 @@
+import kotlin.native.concurrent.*
 import kotlinx.cinterop.*
 import platform.AppKit.*
 import platform.Foundation.*
@@ -22,7 +23,7 @@ private fun runApp() {
     app.run()
 }
 
-data class Data(val stamp: Long)
+data class Data(val stamp: ULong)
 
 private class Controller : NSObject() {
     private val asyncQueue = dispatch_queue_create("com.jetbrains.CustomQueue", null)
@@ -30,12 +31,12 @@ private class Controller : NSObject() {
     @ObjCAction
     fun onClick() {
         // Execute some async action on button click.
-        dispatch_async_f(asyncQueue, kotlin.native.worker.detachObjectGraph {
-            Data(clock_gettime_nsec_np(CLOCK_REALTIME))
-        }, staticCFunction {
+        dispatch_async_f(asyncQueue, DetachedObjectGraph {
+            Data(clock_gettime_nsec_np(CLOCK_REALTIME.convert()))
+        }.asCPointer(), staticCFunction {
             it ->
             initRuntimeIfNeeded()
-            val data = kotlin.native.worker.attachObjectGraph<Data>(it)
+            val data = DetachedObjectGraph<Data>(it).attach()
             println("in async: $data")
         })
     }

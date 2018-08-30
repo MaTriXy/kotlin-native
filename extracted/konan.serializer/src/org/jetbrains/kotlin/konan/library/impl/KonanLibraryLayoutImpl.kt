@@ -10,7 +10,7 @@ import org.jetbrains.kotlin.konan.library.KonanLibraryLayout
 import org.jetbrains.kotlin.konan.target.KonanTarget
 import org.jetbrains.kotlin.konan.util.removeSuffixIfPresent
 
-private class ZippedKonanLibraryLayout(val klibFile: File, override val target: KonanTarget? = null): KonanLibraryLayout {
+private class ZippedKonanLibraryLayout(val klibFile: File, override val target: KonanTarget?): KonanLibraryLayout {
 
     init { zippedKonanLibraryChecks(klibFile) }
 
@@ -29,14 +29,14 @@ internal fun zippedKonanLibraryChecks(klibFile: File) {
 
 internal fun zippedKonanLibraryRoot(klibFile: File) = klibFile.asZipRoot
 
-private class UnzippedKonanLibraryLayout(override val libDir: File, override val target: KonanTarget? = null): KonanLibraryLayout {
+private class UnzippedKonanLibraryLayout(override val libDir: File, override val target: KonanTarget?): KonanLibraryLayout {
     override val libraryName = libDir.path
 }
 
-// This class automatically extracts pieces of
-// the library on first access. Use it if you need
-// to pass extracted files to an external tool.
-// Otherwise, stick to ZippedKonanLibrary.
+/**
+ * This class automatically extracts pieces of the library on first access. Use it if you need
+ * to pass extracted files to an external tool. Otherwise, stick to [ZippedKonanLibraryLayout].
+ */
 private class FileExtractor(zippedLibraryLayout: KonanLibraryLayout): KonanLibraryLayout by zippedLibraryLayout {
 
     override val manifestFile: File by lazy { extract(super.manifestFile) }

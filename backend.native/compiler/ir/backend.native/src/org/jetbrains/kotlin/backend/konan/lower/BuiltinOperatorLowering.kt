@@ -1,17 +1,6 @@
 /*
- * Copyright 2010-2017 JetBrains s.r.o.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE file.
  */
 
 package org.jetbrains.kotlin.backend.konan.lower
@@ -24,6 +13,8 @@ import org.jetbrains.kotlin.backend.common.lower.irNot
 import org.jetbrains.kotlin.backend.konan.*
 import org.jetbrains.kotlin.backend.konan.irasdescriptors.containsNull
 import org.jetbrains.kotlin.backend.konan.irasdescriptors.isSubtypeOf
+import org.jetbrains.kotlin.backend.konan.irasdescriptors.overrides
+import org.jetbrains.kotlin.descriptors.CallableMemberDescriptor
 import org.jetbrains.kotlin.descriptors.FunctionDescriptor
 import org.jetbrains.kotlin.ir.builders.*
 import org.jetbrains.kotlin.ir.declarations.IrFile
@@ -37,11 +28,13 @@ import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
 import org.jetbrains.kotlin.ir.types.makeNullable
 import org.jetbrains.kotlin.ir.util.irCall
 import org.jetbrains.kotlin.ir.builders.irGet
+import org.jetbrains.kotlin.ir.declarations.IrClass
 import org.jetbrains.kotlin.ir.types.IrType
 import org.jetbrains.kotlin.ir.types.isNothing
 import org.jetbrains.kotlin.ir.types.toKotlinType
 import org.jetbrains.kotlin.ir.util.defaultOrNullableType
 import org.jetbrains.kotlin.ir.util.isNullConst
+import org.jetbrains.kotlin.ir.util.simpleFunctions
 import org.jetbrains.kotlin.ir.visitors.transformChildrenVoid
 
 /**
@@ -116,6 +109,8 @@ internal class BuiltinOperatorLowering(val context: Context) : FileLoweringPass,
                 extensionReceiver = expression
             }
 
+    private val anyEquals = irBuiltins.anyClass.owner.simpleFunctions().single { it.name.asString() == "equals" }
+
     private fun lowerEqeq(expression: IrCall): IrExpression {
         // TODO: optimize boxing?
 
@@ -133,7 +128,7 @@ internal class BuiltinOperatorLowering(val context: Context) : FileLoweringPass,
 
             if (expression.symbol == irBuiltins.eqeqSymbol) {
                 lhs.type.getInlinedClass()?.let {
-                    if (it == rhs.type.getInlinedClass()) {
+                    if (it == rhs.type.getInlinedClass() && inlinedClassHasDefaultEquals(it)) {
                         return genInlineClassEquals(expression.descriptor, rhs, lhs)
                     }
                 }
@@ -141,6 +136,22 @@ internal class BuiltinOperatorLowering(val context: Context) : FileLoweringPass,
 
             return genFloatingOrReferenceEquals(expression.descriptor, lhs, rhs)
         }
+    }
+
+    private fun inlinedClassHasDefaultEquals(irClass: IrClass): Boolean {
+        if (!irClass.descriptor.isInline) {
+            // Implicitly-inlined class, e.g. primitive one.
+            return true
+        }
+
+        val equals = irClass.simpleFunctions()
+                .single { it.name.asString() == "equals" && it.valueParameters.size == 1 && it.overrides(anyEquals) }
+
+        // Note: this is not absolutely correct for inline class from other module
+        // since custom equals implementation can be added after compilation but before linking.
+        // TODO: reimplement after inline classes get properly designed `equals` operator.
+        // see https://youtrack.jetbrains.com/issue/KT-26354.
+        return equals.descriptor.kind == CallableMemberDescriptor.Kind.SYNTHESIZED
     }
 
     fun IrBuilderWithScope.genInlineClassEquals(

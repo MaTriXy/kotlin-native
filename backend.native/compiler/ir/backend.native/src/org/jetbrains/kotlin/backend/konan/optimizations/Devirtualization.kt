@@ -1,17 +1,6 @@
 /*
- * Copyright 2010-2017 JetBrains s.r.o.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE file.
  */
 
 package org.jetbrains.kotlin.backend.konan.optimizations
@@ -253,6 +242,9 @@ internal object Devirtualization {
                             .filterIsInstance<DataFlowIR.Type.Public>()
                             .filter { !it.isAbstract }
                             .forEach { addInstantiatingClass(it) }
+                } else {
+                    // String is implicitly created as argument of <main>.
+                    addInstantiatingClass(symbolTable.mapType(context.irBuiltIns.stringType))
                 }
                 // Traverse call graph from the roots.
                 rootSet.forEach { dfs(it) }
@@ -701,6 +693,12 @@ internal object Devirtualization {
             private var stack = mutableListOf<DataFlowIR.FunctionSymbol>()
 
             fun build() {
+                if (entryPoint != null) {
+                    // String arguments are implicitly put into the <args> array parameter of <main>.
+                    concreteClass(symbolTable.mapType(context.irBuiltIns.stringType).resolved()).addEdge(
+                            fieldNode(constraintGraph.arrayItemField)
+                    )
+                }
                 rootSet.forEach { createFunctionConstraintGraph(it, true)!! }
                 while (stack.isNotEmpty()) {
                     val symbol = stack.pop()

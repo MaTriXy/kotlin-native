@@ -1,17 +1,6 @@
 /*
- * Copyright 2010-2017 JetBrains s.r.o.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE file.
  */
 
 package org.jetbrains.kotlin.backend.konan.objcexport
@@ -22,6 +11,7 @@ import org.jetbrains.kotlin.builtins.KotlinBuiltIns
 import org.jetbrains.kotlin.builtins.UnsignedType
 import org.jetbrains.kotlin.descriptors.*
 import org.jetbrains.kotlin.incremental.components.NoLookupLocation
+import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.resolve.constants.ArrayValue
@@ -55,6 +45,16 @@ abstract class ObjCExportHeaderGenerator(
     internal val generatedClasses = mutableSetOf<ClassDescriptor>()
     internal val topLevel = mutableMapOf<FqName, MutableList<CallableMemberDescriptor>>()
 
+    private val mappedToNSNumber: List<ClassDescriptor> = with(builtIns) {
+        val result = mutableListOf(boolean, byte, short, int, long, float, double)
+
+        UnsignedType.values().mapTo(result) { unsignedType ->
+            moduleDescriptor.findClassAcrossModuleDependencies(unsignedType.classId)!!
+        }
+
+        result
+    }
+
     private val customTypeMappers: Map<ClassDescriptor, CustomTypeMapper> = with(builtIns) {
         val result = mutableListOf<CustomTypeMapper>()
 
@@ -67,16 +67,13 @@ abstract class ObjCExportHeaderGenerator(
         result += CustomTypeMapper.Collection(generator, map, "NSDictionary")
         result += CustomTypeMapper.Collection(generator, mutableMap, namer.mutableMapName)
 
-        for (descriptor in listOf(boolean, byte, short, int, long, float, double)) {
-            // TODO: Kotlin code doesn't have any checkcasts on unboxing,
-            // so it is possible that it expects boxed number of other type and unboxes it incorrectly.
+        NSNumberKind.values().forEach {
             // TODO: NSNumber seem to have different equality semantics.
-            result += CustomTypeMapper.Simple(descriptor, "NSNumber")
-        }
+            if (it.mappedKotlinClassId != null) {
+                val descriptor = moduleDescriptor.findClassAcrossModuleDependencies(it.mappedKotlinClassId)!!
+                result += CustomTypeMapper.Simple(descriptor, namer.numberBoxName(descriptor))
+            }
 
-        for (unsignedType in UnsignedType.values()) {
-            val descriptor = moduleDescriptor.findClassAcrossModuleDependencies(unsignedType.classId)!!
-            result += CustomTypeMapper.Simple(descriptor, "NSNumber")
         }
 
         result += CustomTypeMapper.Simple(string, "NSString")
@@ -132,7 +129,7 @@ abstract class ObjCExportHeaderGenerator(
                 namer.mutableSetName,
                 generics = listOf("ObjectType"),
                 superClass = "NSMutableSet<ObjectType>",
-                attributes = listOf("objc_runtime_name(\"KotlinMutableSet\")")
+                attributes = listOf(objcRuntimeNameAttribute("KotlinMutableSet"))
         ))
 
         // TODO: only if appears
@@ -140,12 +137,14 @@ abstract class ObjCExportHeaderGenerator(
                 namer.mutableMapName,
                 generics = listOf("KeyType", "ObjectType"),
                 superClass = "NSMutableDictionary<KeyType, ObjectType>",
-                attributes = listOf("objc_runtime_name(\"KotlinMutableDictionary\")")
+                attributes = listOf(objcRuntimeNameAttribute("KotlinMutableDictionary"))
         ))
 
         stubs.add(ObjCInterface("NSError", categoryName = "NSErrorKotlinException", members = buildMembers {
             +ObjCProperty("kotlinException", null, ObjCNullableReferenceType(ObjCIdType), listOf("readonly"))
         }))
+
+        genKotlinNumbers()
 
         val packageFragments = moduleDescriptor.getPackageFragments()
 
@@ -204,6 +203,67 @@ abstract class ObjCExportHeaderGenerator(
         }
 
         return stubs
+    }
+
+    private fun genKotlinNumbers() {
+        val members = buildMembers {
+            NSNumberKind.values().forEach {
+                +nsNumberFactory(it, listOf("unavailable"))
+            }
+            NSNumberKind.values().forEach {
+                +nsNumberInit(it, listOf("unavailable"))
+            }
+        }
+        stubs.add(ObjCInterface(
+                namer.kotlinNumberName,
+                superClass = "NSNumber",
+                members = members,
+                attributes = listOf(objcRuntimeNameAttribute("KotlinNumber"))
+        ))
+
+        NSNumberKind.values().forEach {
+            if (it.mappedKotlinClassId != null) {
+                stubs += genKotlinNumber(it.mappedKotlinClassId, it)
+            }
+        }
+    }
+
+    private fun genKotlinNumber(kotlinClassId: ClassId, kind: NSNumberKind): ObjCInterface {
+        val descriptor = moduleDescriptor.findClassAcrossModuleDependencies(kotlinClassId)!!
+        val name = namer.numberBoxName(descriptor)
+
+        val members = buildMembers {
+            +nsNumberFactory(kind)
+            +nsNumberInit(kind)
+        }
+        return ObjCInterface(
+                name,
+                superClass = namer.kotlinNumberName,
+                members = members,
+                attributes = listOf(objcRuntimeNameAttribute("Kotlin${kotlinClassId.shortClassName}"))
+        )
+    }
+
+    private fun nsNumberInit(kind: NSNumberKind, attributes: List<String> = emptyList()): ObjCMethod {
+        return ObjCMethod(
+                null,
+                false,
+                ObjCInstanceType,
+                listOf(kind.factorySelector),
+                listOf(ObjCParameter("value", null, kind.objCType)),
+                attributes
+        )
+    }
+
+    private fun nsNumberFactory(kind: NSNumberKind, attributes: List<String> = emptyList()): ObjCMethod {
+        return ObjCMethod(
+                null,
+                true,
+                ObjCInstanceType,
+                listOf(kind.initSelector),
+                listOf(ObjCParameter("value", null, kind.objCType)),
+                attributes
+        )
     }
 
     private fun translateClassName(descriptor: ClassDescriptor): String = classOrInterfaceToName.getOrPut(descriptor) {
@@ -560,6 +620,7 @@ abstract class ObjCExportHeaderGenerator(
     }
 
     private fun swiftNameAttribute(swiftName: String) = "swift_name(\"$swiftName\")"
+    private fun objcRuntimeNameAttribute(name: String) = "objc_runtime_name(\"$name\")"
 
     private val methodsWithThrowAnnotationConsidered = mutableSetOf<FunctionDescriptor>()
 
@@ -741,22 +802,22 @@ abstract class ObjCExportHeaderGenerator(
     private fun mapType(kotlinType: KotlinType, typeBridge: TypeBridge): ObjCType = when (typeBridge) {
         ReferenceBridge -> mapReferenceType(kotlinType)
         is ValueTypeBridge -> {
-            val cName = when (typeBridge.objCValueType) {
-                ObjCValueType.BOOL -> "BOOL"
-                ObjCValueType.UNICHAR -> "unichar"
-                ObjCValueType.CHAR -> "int8_t"
-                ObjCValueType.SHORT -> "int16_t"
-                ObjCValueType.INT -> "int32_t"
-                ObjCValueType.LONG_LONG -> "int64_t"
-                ObjCValueType.UNSIGNED_CHAR -> "uint8_t"
-                ObjCValueType.UNSIGNED_SHORT -> "uint16_t"
-                ObjCValueType.UNSIGNED_INT -> "uint32_t"
-                ObjCValueType.UNSIGNED_LONG_LONG -> "uint64_t"
-                ObjCValueType.FLOAT -> "float"
-                ObjCValueType.DOUBLE -> "double"
+            when (typeBridge.objCValueType) {
+                ObjCValueType.BOOL -> ObjCPrimitiveType("BOOL")
+                ObjCValueType.UNICHAR -> ObjCPrimitiveType("unichar")
+                ObjCValueType.CHAR -> ObjCPrimitiveType("int8_t")
+                ObjCValueType.SHORT -> ObjCPrimitiveType("int16_t")
+                ObjCValueType.INT -> ObjCPrimitiveType("int32_t")
+                ObjCValueType.LONG_LONG -> ObjCPrimitiveType("int64_t")
+                ObjCValueType.UNSIGNED_CHAR -> ObjCPrimitiveType("uint8_t")
+                ObjCValueType.UNSIGNED_SHORT -> ObjCPrimitiveType("uint16_t")
+                ObjCValueType.UNSIGNED_INT -> ObjCPrimitiveType("uint32_t")
+                ObjCValueType.UNSIGNED_LONG_LONG -> ObjCPrimitiveType("uint64_t")
+                ObjCValueType.FLOAT -> ObjCPrimitiveType("float")
+                ObjCValueType.DOUBLE -> ObjCPrimitiveType("double")
+                ObjCValueType.POINTER -> ObjCPointerType(ObjCVoidType)
             }
             // TODO: consider other namings.
-            ObjCPrimitiveType(cName)
         }
     }
 }

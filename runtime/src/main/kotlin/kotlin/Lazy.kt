@@ -1,23 +1,13 @@
 /*
- * Copyright 2010-2017 JetBrains s.r.o.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * that can be found in the LICENSE file.
  */
 
 package kotlin
 
-import kotlin.reflect.KProperty
+import kotlin.native.concurrent.FreezeAwareLazyImpl
 import kotlin.native.internal.FixmeConcurrency
+import kotlin.reflect.KProperty
 
 /**
  * Creates a new instance of the [Lazy] that uses the specified initialization function [initializer]
@@ -28,7 +18,7 @@ import kotlin.native.internal.FixmeConcurrency
  * Note that the returned instance uses itself to synchronize on. Do not synchronize from external code on
  * the returned instance as it may cause accidental deadlock. Also this behavior can be changed in the future.
  */
-public actual fun <T> lazy(initializer: () -> T): Lazy<T> = kotlin.native.worker.FreezeAwareLazyImpl(initializer)
+public actual fun <T> lazy(initializer: () -> T): Lazy<T> = FreezeAwareLazyImpl(initializer)
 
 /**
  * Creates a new instance of the [Lazy] that uses the specified initialization function [initializer]
@@ -43,8 +33,8 @@ public actual fun <T> lazy(initializer: () -> T): Lazy<T> = kotlin.native.worker
 @FixmeConcurrency
 public actual fun <T> lazy(mode: LazyThreadSafetyMode, initializer: () -> T): Lazy<T> =
         when (mode) {
-            LazyThreadSafetyMode.SYNCHRONIZED -> TODO() // was SynchronizedLazyImpl(initializer)
-            LazyThreadSafetyMode.PUBLICATION -> TODO() // was SafePublicationLazyImpl(initializer)
+            LazyThreadSafetyMode.SYNCHRONIZED -> throw UnsupportedOperationException()
+            LazyThreadSafetyMode.PUBLICATION -> throw UnsupportedOperationException()
             LazyThreadSafetyMode.NONE -> UnsafeLazyImpl(initializer)
         }
 
@@ -61,4 +51,4 @@ public actual fun <T> lazy(mode: LazyThreadSafetyMode, initializer: () -> T): La
  */
 @FixmeConcurrency
 @Suppress("UNUSED_PARAMETER")
-public actual fun <T> lazy(lock: Any?, initializer: () -> T): Lazy<T> = TODO() // was SynchronizedLazyImpl(initializer, lock)
+public actual fun <T> lazy(lock: Any?, initializer: () -> T): Lazy<T> = throw UnsupportedOperationException()
